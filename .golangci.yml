@@ -1,0 +1,39 @@
+version: "2"
+
+linters:
+  enable:
+    - gofumpt
+    - govet
+    - nilaway
+    - bodyclose
+    - copyloopvar
+    - cotylint
+    - errcheck
+    - errorlint
+    - gocritic
+    - gosec
+    - ineffassign
+    - misspell
+    - nakedret
+    - nilnil
+    - prealloc
+    - staticcheck
+    - unconvert
+    - unused
+
+linters-settings:
+  gofumpt:
+    extra-rules: true
+  govet:
+    enable:
+      - copylocks
+      - shadow
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

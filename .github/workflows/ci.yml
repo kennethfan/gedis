@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Format check
+        run: |
+          go install mvdan.cc/gofumpt@latest
+          gofumpt -l .
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race -shuffle=on -count=1 ./...
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t redrock:ci .
+
+      - name: Smoke test
+        run: |
+          docker run -d --name redrock-ci -p 6399:6380 redrock:ci
+          sleep 3
+          docker exec redrock-ci /redrock --help 2>/dev/null || true
+          docker logs redrock-ci | grep -q "redrock listening"
+          docker stop redrock-ci && docker rm redrock-ci

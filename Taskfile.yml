@@ -1,0 +1,24 @@
+version: "3"
+
+tasks:
+  default:
+    desc: 格式化 + vet + 测试（-race）
+    cmds:
+      - gofumpt -l .
+      - go vet ./...
+      - go test -race -shuffle=on -count=1 ./...
+
+  test:
+    desc: 全量测试
+    cmds:
+      - go test -race -shuffle=on -count=1 ./...
+
+  lint:
+    desc: golangci-lint（需先安装）
+    cmds:
+      - golangci-lint run ./...
+
+  build:
+    desc: 构建 redrock 二进制
+    cmds:
+      - go build -o bin/redrock ./cmd/redrock

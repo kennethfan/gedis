@@ -27,6 +27,14 @@ go.work.sum
 # env file
 .env
 
+# Redrock runtime artifacts
+data/
+bin/
+*.log
+
+# Agent session state
+.omo/
+
 # Editor/IDE
 # .idea/
 # .vscode/

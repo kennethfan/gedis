@@ -1,0 +1,19 @@
+# Redrock 最小配置示例。完整说明见票 #5。
+[server]
+host = "127.0.0.1"
+port = 6380
+
+[storage]
+datadir = "./data"
+
+[memory]
+maxmemory = 1073741824
+policy = "allkeys-lru"
+
+[persistence]
+appendonly = true
+fsync = "everysec"
+
+[metrics]
+enabled = false
+port = 9121

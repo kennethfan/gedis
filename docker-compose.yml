@@ -1,0 +1,22 @@
+# 本地一主一从：replica 需手动 REPLICAOF（见 README）。
+services:
+  master:
+    build: .
+    ports:
+      - "6380:6380"
+      - "9121:9121"
+    volumes:
+      - master-data:/data
+    command: ["-config", "/etc/redrock/redrock.docker.toml"]
+
+  replica:
+    build: .
+    ports:
+      - "6381:6380"
+    volumes:
+      - replica-data:/data
+    command: ["-config", "/etc/redrock/redrock.docker.toml"]
+
+volumes:
+  master-data:
+  replica-data:

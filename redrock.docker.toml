@@ -1,0 +1,19 @@
+# Redrock 容器内配置：监听全部接口，数据落 /data（VOLUME）。
+[server]
+host = "0.0.0.0"
+port = 6380
+
+[storage]
+datadir = "/data"
+
+[memory]
+maxmemory = 1073741824
+policy = "allkeys-lru"
+
+[persistence]
+appendonly = true
+fsync = "everysec"
+
+[metrics]
+enabled = true
+port = 9121
