@@ -1,4 +1,4 @@
-// Package storage 定义 Redrock 的存储 seam：上层只依赖 Store 接口。
+// Package storage 定义 Gedis 的存储 seam：上层只依赖 Store 接口。
 package storage
 
 import (

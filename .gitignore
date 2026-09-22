@@ -27,7 +27,7 @@ go.work.sum
 # env file
 .env
 
-# Redrock runtime artifacts
+# Gedis runtime artifacts
 data/
 bin/
 *.log

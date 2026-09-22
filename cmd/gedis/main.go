@@ -1,4 +1,4 @@
-// Command redrock 是 Redrock 的入口：解析 flag、加载 TOML 配置、打开存储引擎。
+// Command gedis 是 Gedis 的入口：解析 flag、加载 TOML 配置、打开存储引擎。
 package main
 
 import (
@@ -21,7 +21,7 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		slog.Error("redrock exited", "err", err)
+		slog.Error("gedis exited", "err", err)
 		os.Exit(1)
 	}
 }
@@ -36,7 +36,7 @@ func mustParseFsync(s string) storage.FsyncPolicy {
 }
 
 func run() error {
-	configPath := flag.String("config", "redrock.toml", "TOML 配置文件路径")
+	configPath := flag.String("config", "gedis.toml", "TOML 配置文件路径")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)
@@ -44,7 +44,7 @@ func run() error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	slog.Info("redrock starting",
+	slog.Info("gedis starting",
 		"host", cfg.Server.Host,
 		"port", cfg.Server.Port,
 		"dataDir", cfg.Storage.DataDir,
@@ -92,7 +92,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
 	}
-	slog.Info("redrock listening", "addr", ln.Addr())
+	slog.Info("gedis listening", "addr", ln.Addr())
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

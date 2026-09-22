@@ -1,4 +1,4 @@
-# Redrock 容器内配置：监听全部接口，数据落 /data（VOLUME）。
+# Gedis 容器内配置：监听全部接口，数据落 /data（VOLUME）。
 [server]
 host = "0.0.0.0"
 port = 6380

@@ -34,15 +34,15 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build image
-        run: docker build -t redrock:ci .
+        run: docker build -t gedis:ci .
 
       - name: Smoke test
         run: |
-          docker run -d --name redrock-ci -p 6399:6380 redrock:ci
+          docker run -d --name gedis-ci -p 6399:6380 gedis:ci
           for i in $(seq 1 10); do
-            docker logs redrock-ci 2>&1 | grep -q "redrock listening" && break
+            docker logs gedis-ci 2>&1 | grep -q "gedis listening" && break
             sleep 2
           done
-          docker logs redrock-ci
-          docker logs redrock-ci 2>&1 | grep -q "redrock listening"
-          docker rm -f redrock-ci
+          docker logs gedis-ci
+          docker logs gedis-ci 2>&1 | grep -q "gedis listening"
+          docker rm -f gedis-ci

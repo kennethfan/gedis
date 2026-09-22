@@ -1,4 +1,4 @@
-# Redrock
+# Gedis
 
 基于 Pebble（纯 Go LSM-tree）的 Redis 兼容存储引擎，用 Go 实现。
 
@@ -20,8 +20,8 @@
 # 编译（纯静态二进制，无 CGo）
 make build
 
-# 启动（默认 redrock.toml，端口 6380）
-./bin/redrock
+# 启动（默认 gedis.toml，端口 6380）
+./bin/gedis
 
 # 使用 redis-cli 连接
 redis-cli -p 6380
@@ -34,7 +34,7 @@ redis-cli -p 6380
 make docker
 
 # 单节点
-docker run -d -p 6380:6380 -v redrock-data:/data redrock:latest
+docker run -d -p 6380:6380 -v gedis-data:/data gedis:latest
 
 # 一主一从本地测试
 make compose-up
@@ -44,7 +44,7 @@ make compose-down
 
 ## Configuration
 
-TOML 格式（见 `redrock.toml`，容器内用 `redrock.docker.toml`）：
+TOML 格式（见 `gedis.toml`，容器内用 `gedis.docker.toml`）：
 
 ```toml
 [server]
@@ -90,8 +90,8 @@ curl localhost:9121/metrics   # 需 [metrics] enabled
 ## Project Structure
 
 ```
-redrock/
-├── cmd/redrock/          # 主程序入口
+gedis/
+├── cmd/gedis/          # 主程序入口
 ├── internal/
 │   ├── network/          # TCP 服务 + Router + 统计/慢日志
 │   ├── protocol/         # RESP2/RESP3 编解码
@@ -105,8 +105,8 @@ redrock/
 │   └── adr/              # 架构决策记录
 ├── Dockerfile            # 多阶段构建
 ├── docker-compose.yml    # 一主一从本地测试
-├── redrock.toml          # 本地配置示例
-└── redrock.docker.toml   # 容器内配置
+├── gedis.toml          # 本地配置示例
+└── gedis.docker.toml   # 容器内配置
 ```
 
 ## Development

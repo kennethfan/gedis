@@ -1,4 +1,4 @@
-// Package replication 实现 Redrock 的主从复制：Backlog 环缓冲保存近期
+// Package replication 实现 Gedis 的主从复制：Backlog 环缓冲保存近期
 // 写操作（raw KV 粒度，TTL 随 entry 字节原样保留），RDB 编解码做全量传输。
 // 线上帧沿用 Redis 风格：+FULLRESYNC / +CONTINUE + ["OP",...] 数组。
 package replication

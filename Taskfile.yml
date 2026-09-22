@@ -19,6 +19,6 @@ tasks:
       - golangci-lint run ./...
 
   build:
-    desc: 构建 redrock 二进制
+    desc: 构建 gedis 二进制
     cmds:
-      - go build -o bin/redrock ./cmd/redrock
+      - go build -o bin/gedis ./cmd/gedis

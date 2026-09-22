@@ -1,4 +1,4 @@
-# Redrock
+# Gedis
 
 A Redis-compatible storage engine in Go, backed by Pebble (pure-Go LSM-tree).
 
@@ -20,8 +20,8 @@ A Redis-compatible storage engine in Go, backed by Pebble (pure-Go LSM-tree).
 # Build (static binary, no CGo)
 make build
 
-# Start (default redrock.toml, port 6380)
-./bin/redrock
+# Start (default gedis.toml, port 6380)
+./bin/gedis
 
 # Connect with redis-cli
 redis-cli -p 6380
@@ -34,7 +34,7 @@ redis-cli -p 6380
 make docker
 
 # Single node
-docker run -d -p 6380:6380 -v redrock-data:/data redrock:latest
+docker run -d -p 6380:6380 -v gedis-data:/data gedis:latest
 
 # Local master-replica test
 make compose-up
@@ -44,7 +44,7 @@ make compose-down
 
 ## Configuration
 
-TOML format (see `redrock.toml`; inside containers use `redrock.docker.toml`):
+TOML format (see `gedis.toml`; inside containers use `gedis.docker.toml`):
 
 ```toml
 [server]
@@ -90,8 +90,8 @@ curl localhost:9121/metrics   # requires [metrics] enabled
 ## Project Structure
 
 ```
-redrock/
-├── cmd/redrock/          # Main entrypoint
+gedis/
+├── cmd/gedis/          # Main entrypoint
 ├── internal/
 │   ├── network/          # TCP server + Router + stats/slowlog
 │   ├── protocol/         # RESP2/RESP3 codec
@@ -105,8 +105,8 @@ redrock/
 │   └── adr/              # Architecture decision records
 ├── Dockerfile            # Multi-stage build
 ├── docker-compose.yml    # Local master-replica test
-├── redrock.toml          # Local config example
-└── redrock.docker.toml   # In-container config
+├── gedis.toml          # Local config example
+└── gedis.docker.toml   # In-container config
 ```
 
 ## Development

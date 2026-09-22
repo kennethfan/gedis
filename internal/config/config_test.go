@@ -16,7 +16,7 @@ host = "127.0.0.1"
 port = 6380
 
 [storage]
-datadir = "/tmp/redrock-test"
+datadir = "/tmp/gedis-test"
 
 [memory]
 maxmemory = 1073741824
@@ -30,7 +30,7 @@ fsync = "everysec"
 enabled = true
 port = 9121
 `
-	path := filepath.Join(t.TempDir(), "redrock.toml")
+	path := filepath.Join(t.TempDir(), "gedis.toml")
 	require.NoError(t, os.WriteFile(path, []byte(toml), 0o600))
 
 	// When
@@ -40,7 +40,7 @@ port = 9121
 	require.NoError(t, err)
 	require.Equal(t, "127.0.0.1", cfg.Server.Host)
 	require.Equal(t, 6380, cfg.Server.Port)
-	require.Equal(t, "/tmp/redrock-test", cfg.Storage.DataDir)
+	require.Equal(t, "/tmp/gedis-test", cfg.Storage.DataDir)
 	require.Equal(t, int64(1073741824), cfg.Memory.MaxMemory)
 	require.Equal(t, "allkeys-lru", cfg.Memory.Policy)
 	require.True(t, cfg.Persistence.AppendOnly)

@@ -1,4 +1,4 @@
-# Redrock Specification
+# Gedis Specification
 
 ## Problem Statement
 
@@ -12,7 +12,7 @@
 
 ## Solution
 
-构建 Redrock —— 一个基于 Pebble（纯 Go LSM-tree）的 Redis 兼容存储引擎，用 Go 实现。该方案：
+构建 Gedis —— 一个基于 Pebble（纯 Go LSM-tree）的 Redis 兼容存储引擎，用 Go 实现。该方案：
 
 - 使用 Pebble 作为底层存储引擎，利用 LSM-tree 架构提升写入性能
 - 保持完全的 Redis 协议和命令兼容性，可作为 drop-in 替换
@@ -24,61 +24,61 @@
 
 ### 核心功能
 
-1. As a Redis user, I want to use Redrock as a drop-in replacement for Redis, so that I don't need to change my application code
-2. As a Redis user, I want Redrock to support all Redis String commands, so that I can use it for basic key-value operations
-3. As a Redis user, I want Redrock to support all Redis Hash commands, so that I can store and retrieve structured data
-4. As a Redis user, I want Redrock to support all Redis List commands, so that I can use it for queue and stack operations
-5. As a Redis user, I want Redrock to support all Redis Set commands, so that I can perform set operations like intersection and union
-6. As a Redis user, I want Redrock to support all Redis Sorted Set commands, so that I can use it for ranking and scoring operations
-7. As a Redis user, I want Redrock to support RESP2 and RESP3 protocols, so that I can use it with any Redis client
+1. As a Redis user, I want to use Gedis as a drop-in replacement for Redis, so that I don't need to change my application code
+2. As a Redis user, I want Gedis to support all Redis String commands, so that I can use it for basic key-value operations
+3. As a Redis user, I want Gedis to support all Redis Hash commands, so that I can store and retrieve structured data
+4. As a Redis user, I want Gedis to support all Redis List commands, so that I can use it for queue and stack operations
+5. As a Redis user, I want Gedis to support all Redis Set commands, so that I can perform set operations like intersection and union
+6. As a Redis user, I want Gedis to support all Redis Sorted Set commands, so that I can use it for ranking and scoring operations
+7. As a Redis user, I want Gedis to support RESP2 and RESP3 protocols, so that I can use it with any Redis client
 
 ### 持久化
 
-8. As a Redis user, I want Redrock to persist data to disk using Pebble, so that my data survives restarts
+8. As a Redis user, I want Gedis to persist data to disk using Pebble, so that my data survives restarts
 9. As a Redis user, I want to configure the WAL (Write-Ahead Log) behavior, so that I can balance between performance and durability
 10. As a Redis user, I want to choose the fsync strategy (always, everysec, no), so that I can control the durability-performance tradeoff
-11. As a Redis user, I want Redrock to use Write Batch for efficient writes, so that I get better write throughput
-12. As a Redis user, I want Redrock to support configurable compression algorithms, so that I can optimize for storage space vs CPU usage
+11. As a Redis user, I want Gedis to use Write Batch for efficient writes, so that I get better write throughput
+12. As a Redis user, I want Gedis to support configurable compression algorithms, so that I can optimize for storage space vs CPU usage
 
 ### 内存管理
 
-13. As a Redis user, I want to set a maximum memory limit, so that Redrock doesn't consume excessive memory
-14. As a Redis user, I want Redrock to use LRU eviction, so that hot data stays in memory while cold data is evicted
+13. As a Redis user, I want to set a maximum memory limit, so that Gedis doesn't consume excessive memory
+14. As a Redis user, I want Gedis to use LRU eviction, so that hot data stays in memory while cold data is evicted
 15. As a Redis user, I want to change the memory limit at runtime using CONFIG SET, so that I can adjust without restarting
 16. As a Redis user, I want to monitor memory usage via INFO command, so that I can track resource consumption
 
 ### 复制
 
-17. As a Redis user, I want Redrock to support master-slave replication, so that I can achieve high availability
-18. As a Redis user, I want Redrock to implement PSYNC protocol, so that it works with existing Redis replication infrastructure
-19. As a Redis user, I want Redrock to support full synchronization via RDB transfer, so that new replicas can join the cluster
-20. As a Redis user, I want Redrock to support incremental synchronization, so that temporary disconnections don't require full re-sync
+17. As a Redis user, I want Gedis to support master-slave replication, so that I can achieve high availability
+18. As a Redis user, I want Gedis to implement PSYNC protocol, so that it works with existing Redis replication infrastructure
+19. As a Redis user, I want Gedis to support full synchronization via RDB transfer, so that new replicas can join the cluster
+20. As a Redis user, I want Gedis to support incremental synchronization, so that temporary disconnections don't require full re-sync
 
 ### 过期策略
 
-21. As a Redis user, I want Redrock to support key expiration, so that I can use it for cache with TTL
-22. As a Redis user, I want Redrock to use lazy deletion (check on read), so that expired keys don't consume memory
-23. As a Redis user, I want Redrock to use periodic deletion (background scan), so that expired keys are cleaned up proactively
+21. As a Redis user, I want Gedis to support key expiration, so that I can use it for cache with TTL
+22. As a Redis user, I want Gedis to use lazy deletion (check on read), so that expired keys don't consume memory
+23. As a Redis user, I want Gedis to use periodic deletion (background scan), so that expired keys are cleaned up proactively
 
 ### 监控与运维
 
-24. As a Redis user, I want Redrock to support the INFO command, so that I can get server status and statistics
-25. As a Redis user, I want Redrock to expose Prometheus metrics, so that I can integrate with monitoring systems
-26. As a Redis user, I want Redrock to support slow query log, so that I can identify performance bottlenecks
-27. As a Redis user, I want Redrock to support CONFIG GET/SET commands, so that I can manage configuration at runtime
+24. As a Redis user, I want Gedis to support the INFO command, so that I can get server status and statistics
+25. As a Redis user, I want Gedis to expose Prometheus metrics, so that I can integrate with monitoring systems
+26. As a Redis user, I want Gedis to support slow query log, so that I can identify performance bottlenecks
+27. As a Redis user, I want Gedis to support CONFIG GET/SET commands, so that I can manage configuration at runtime
 
 ### 部署
 
-28. As a DevOps engineer, I want Redrock to be a single binary, so that deployment is simple
-29. As a DevOps engineer, I want Redrock to provide a Docker image, so that I can deploy in containerized environments
-30. As a DevOps engineer, I want Redrock to use TOML configuration, so that configuration is easy to read and modify
+28. As a DevOps engineer, I want Gedis to be a single binary, so that deployment is simple
+29. As a DevOps engineer, I want Gedis to provide a Docker image, so that I can deploy in containerized environments
+30. As a DevOps engineer, I want Gedis to use TOML configuration, so that configuration is easy to read and modify
 
 ## Implementation Decisions
 
 ### 项目结构
 
 采用模块化目录结构：
-- `cmd/redrock/` - 主程序入口
+- `cmd/gedis/` - 主程序入口
 - `internal/server/` - 网络服务器
 - `internal/protocol/` - RESP 协议解析
 - `internal/storage/` - Pebble 存储层
@@ -126,7 +126,7 @@
 
 ### 测试策略
 
-- 集成测试：启动 Redrock 和 Redis，对比命令执行结果
+- 集成测试：启动 Gedis 和 Redis，对比命令执行结果
 - 使用 Redis 官方测试套件进行回归测试
 - 单元测试覆盖核心数据结构和存储逻辑
 

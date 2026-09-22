@@ -16,7 +16,7 @@ import (
 	"github.com/kennethfan/gedis/internal/replication"
 )
 
-const redrockVersion = "0.1.0"
+const gedisVersion = "0.1.0"
 
 // RegisterMonitor 注册 INFO 与 SLOWLOG；stats 为 nil 时计数类字段为零值。
 // hub 为 nil 时 replication 小节取 Stats 快照（单测场景）。
@@ -88,7 +88,7 @@ func (h *monitorHandler) info(ctx context.Context, args []protocol.Value) protoc
 func (h *monitorHandler) serverSection(snap network.StatsView) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "redis_version:7.4.0\r\n")
-	fmt.Fprintf(&b, "redrock_version:%s\r\n", redrockVersion)
+	fmt.Fprintf(&b, "gedis_version:%s\r\n", gedisVersion)
 	fmt.Fprintf(&b, "process_id:%d\r\n", os.Getpid())
 	fmt.Fprintf(&b, "uptime_in_seconds:%d\r\n", snap.UptimeSeconds)
 	fmt.Fprintf(&b, "uptime_in_days:%d\r\n", snap.UptimeSeconds/86400)

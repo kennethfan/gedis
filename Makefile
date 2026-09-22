@@ -1,11 +1,11 @@
 GO ?= go
-BIN = bin/redrock
-IMAGE = redrock:latest
+BIN = bin/gedis
+IMAGE = gedis:latest
 
 .PHONY: build test vet bench docker compose-up compose-down clean
 
 build:
-	CGO_ENABLED=0 $(GO) build -trimpath -o $(BIN) ./cmd/redrock
+	CGO_ENABLED=0 $(GO) build -trimpath -o $(BIN) ./cmd/gedis
 
 test:
 	$(GO) test -race -shuffle=on -count=1 ./...

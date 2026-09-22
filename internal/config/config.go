@@ -11,7 +11,7 @@ import (
 // ErrNotFound is returned when the config file does not exist.
 var ErrNotFound = errors.New("config: file not found")
 
-// Config is the parsed redrock.toml. Fields are exported for TOML
+// Config is the parsed gedis.toml. Fields are exported for TOML
 // decoding; use Load as the sole entry point (parse-don't-validate).
 type Config struct {
 	Server      Server      `toml:"server"`

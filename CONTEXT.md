@@ -1,10 +1,10 @@
-# Redrock Domain Model
+# Gedis Domain Model
 
 ## Glossary
 
 | Term | Definition |
 |------|------------|
-| **Redrock** | 基于 Pebble 的 Redis 兼容存储引擎，用 Go 实现 |
+| **Gedis** | 基于 Pebble 的 Redis 兼容存储引擎，用 Go 实现 |
 | **Redis 兼容** | 完全兼容 Redis 协议和命令，可作为 drop-in 替换 |
 | **存储引擎** | Pebble（纯 Go LSM-tree），提供持久化、高吞吐的键值存储 |
 | **数据结构** | Redis 支持的数据类型：String, Hash, List, Set, Sorted Set 等 |
@@ -23,7 +23,7 @@
 
 ### 数据模型
 
-Redrock 使用 Pebble 作为底层存储引擎，通过前缀方案在同一个 Pebble 实例中存储所有 Redis 数据结构：
+Gedis 使用 Pebble 作为底层存储引擎，通过前缀方案在同一个 Pebble 实例中存储所有 Redis 数据结构：
 
 - `s:` 前缀 - String 类型
 - `h:` 前缀 - Hash 类型

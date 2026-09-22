@@ -33,11 +33,11 @@ func Test_Metrics_when_Exposition(t *testing.T) {
 	require.NoError(t, err)
 	out := string(body)
 	for _, marker := range []string{
-		"# HELP redrock_commands_processed_total",
-		"# TYPE redrock_commands_processed_total counter",
-		"redrock_commands_processed_total 3",
-		"redrock_connected_clients",
-		"redrock_used_memory_bytes",
+		"# HELP gedis_commands_processed_total",
+		"# TYPE gedis_commands_processed_total counter",
+		"gedis_commands_processed_total 3",
+		"gedis_connected_clients",
+		"gedis_used_memory_bytes",
 	} {
 		require.True(t, strings.Contains(out, marker), "missing %q", marker)
 	}
