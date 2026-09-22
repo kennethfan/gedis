@@ -39,7 +39,10 @@ jobs:
       - name: Smoke test
         run: |
           docker run -d --name redrock-ci -p 6399:6380 redrock:ci
-          sleep 3
-          docker exec redrock-ci /redrock --help 2>/dev/null || true
-          docker logs redrock-ci | grep -q "redrock listening"
-          docker stop redrock-ci && docker rm redrock-ci
+          for i in $(seq 1 10); do
+            docker logs redrock-ci 2>&1 | grep -q "redrock listening" && break
+            sleep 2
+          done
+          docker logs redrock-ci
+          docker logs redrock-ci 2>&1 | grep -q "redrock listening"
+          docker rm -f redrock-ci
