@@ -11,6 +11,7 @@ const (
 	TypeList   byte = 'l'
 	TypeSet    byte = 't'
 	TypeZSet   byte = 'z'
+	TypeHLL    byte = 'H'
 )
 
 const headerLen = 9

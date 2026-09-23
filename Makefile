@@ -16,6 +16,7 @@ compat:
 		./tests/redis-compat/zset.sh; \
 		./tests/redis-compat/geo-scan.sh; \
 		./tests/redis-compat/bitmap.sh; \
+		./tests/redis-compat/hll.sh; \
 	else \
 		echo "compat skipped: redis-server/redis-cli not found"; \
 	fi
