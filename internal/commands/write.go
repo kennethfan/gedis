@@ -18,6 +18,8 @@ func WriteCommandSet() map[string]bool {
 		"BLPOP", "BRPOP", "BLMPOP", "BRMPOP",
 		"SADD", "SREM", "SPOP", "SMOVE",
 		"SINTERSTORE", "SUNIONSTORE", "SDIFFSTORE",
+		"GEOADD", "GEOSEARCHSTORE", "GEORADIUS", "GEORADIUSBYMEMBER",
+		"COPY", "RENAME", "RENAMENX", "SORT",
 		"EXPIRE", "PEXPIRE", "EXPIREAT", "PEXPIREAT", "PERSIST",
 	}
 	out := make(map[string]bool, len(names))

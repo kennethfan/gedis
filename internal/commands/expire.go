@@ -228,6 +228,12 @@ func (s *stringHandler) object(ctx context.Context, args []protocol.Value) proto
 		}
 		return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte("hashtable")}
 	}
+	if e.Type == datastruct.TypeZSet {
+		if len(e.Payload) > 0 && e.Payload[0] == datastruct.ZSetEncodingSkiplist {
+			return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte("skiplist")}
+		}
+		return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte("listpack")}
+	}
 	if e.Type != datastruct.TypeString {
 		return errValueStr("ERR OBJECT ENCODING not supported for this type")
 	}

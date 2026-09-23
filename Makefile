@@ -2,13 +2,22 @@ GO ?= go
 BIN = bin/gedis
 IMAGE = gedis:latest
 
-.PHONY: build test vet bench docker compose-up compose-down clean
+.PHONY: build test vet bench compat docker compose-up compose-down clean
 
 build:
 	CGO_ENABLED=0 $(GO) build -trimpath -o $(BIN) ./cmd/gedis
 
 test:
 	$(GO) test -race -shuffle=on -count=1 ./...
+	$(MAKE) compat
+
+compat:
+	@if command -v redis-server >/dev/null && command -v redis-cli >/dev/null; then \
+		./tests/redis-compat/zset.sh; \
+		./tests/redis-compat/geo-scan.sh; \
+	else \
+		echo "compat skipped: redis-server/redis-cli not found"; \
+	fi
 
 vet:
 	$(GO) vet ./...

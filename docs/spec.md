@@ -154,25 +154,25 @@
 
 ## Out of Scope
 
-以下功能不在本规格范围内：
+以下功能不在本规格范围内（ZSet/Bitmap/Geo/HLL/Stream 已转入 M1/M2，见 ADR-0004，不再是 out-of-scope）：
 
 - **集群模式**：第一版只支持单节点，集群接口预留但不实现
 - **Sentinel 支持**：Redis 哨兵模式不在第一版范围
 - **Module 系统**：不支持 Redis Module API
 - **Lua 脚本**：不支持 EVAL/EVALSHA 命令
-- **事务支持**：MULTI/EXEC 事务不在第一版范围
-- **Pub/Sub**：发布订阅功能不在第一版范围
-- **Stream 数据结构**：第一版不实现，预留接口
+- **事务支持**：MULTI/EXEC 事务不在本期范围
+- **Pub/Sub**：发布订阅功能不在本期范围
 
 ## Further Notes
 
 ### 实现顺序
 
-按照 ADR-0002 的实现计划：
-1. Phase 1 (v0.1)：核心功能 - String, Hash, List, Set 命令
-2. Phase 2 (v0.2)：复制功能 - 主从复制，PSYNC 协议
-3. Phase 3 (v0.3)：高级功能 - Sorted Set, Stream, HyperLogLog
-4. Phase 4 (v1.0)：生产就绪 - 完整监控，性能优化
+按照 ADR-0002 的实现计划（经 ADR-0004 调整为两期）：
+1. Phase 1 (v0.1)：核心功能 - String, Hash, List, Set 命令 ✅ 已交付
+2. Phase 2 (v0.2)：复制功能 - 主从复制，PSYNC 协议 ✅ 已交付
+3. Phase 3a / M1：数据结构补齐（不含 Stream）- ZSet 全量（含 LEX/STORE/阻塞）+ Geo 套壳 + Bitmap 全量 + HLL 全量 + SCAN/TYPE 补齐
+4. Phase 3b / M2（独立 Epic，见 ADR-0004）：Stream 全量 - base（XADD/XLEN/XRANGE/XREAD/XTRIM/XDEL/XINFO）+ 消费组（XREADGROUP/XACK/XCLAIM/XAUTOCLAIM/XPENDING + PEL + 阻塞读）
+5. Phase 4 (v1.0+)：生产就绪 - 完整监控，性能优化
 
 ### 参考项目
 

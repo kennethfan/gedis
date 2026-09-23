@@ -179,6 +179,7 @@ func (h *hashHandler) hscan(ctx context.Context, args []protocol.Value) protocol
 	}
 	pattern := "*"
 	var count int64 = 10
+	noValues := false
 	for i := 2; i < len(args); i++ {
 		name, ok := argString(args[i])
 		if !ok {
@@ -207,6 +208,8 @@ func (h *hashHandler) hscan(ctx context.Context, args []protocol.Value) protocol
 			if err != nil || count < 0 {
 				return errValueStr("ERR value is not an integer or out of range")
 			}
+		case "NOVALUES":
+			noValues = true
 		default:
 			return errValueStr("ERR syntax error")
 		}
@@ -243,7 +246,10 @@ func (h *hashHandler) hscan(ctx context.Context, args []protocol.Value) protocol
 	}
 	flat := make([]protocol.Value, 0, 2*(end-cursor))
 	for _, f := range matched[cursor:end] {
-		flat = append(flat, protocol.BulkOf(f), protocol.BulkOf(m[f]))
+		flat = append(flat, protocol.BulkOf(f))
+		if !noValues {
+			flat = append(flat, protocol.BulkOf(m[f]))
+		}
 	}
 	return protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
 		protocol.BulkOf(strconv.FormatInt(next, 10)),

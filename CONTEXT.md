@@ -5,7 +5,8 @@
 | Term | Definition |
 |------|------------|
 | **Gedis** | 基于 Pebble 的 Redis 兼容存储引擎，用 Go 实现 |
-| **Redis 兼容** | 完全兼容 Redis 协议和命令，可作为 drop-in 替换 |
+| **Redis 兼容（目标）** | 完全兼容 Redis 协议和命令，可作为 drop-in 替换（验收以 `redis-cli` + 官方命令行为为准） |
+| **已兼容子集（现状）** | v1 已实现：String, Hash, List, Set（含 TTL/HEXPIRE、PSYNC 主从、LRU、INFO/SLOWLOG/Prometheus）；未实现：ZSet、Stream、HyperLogLog、Geo、Bitmap/bitops、事务/Lua、Pub/Sub、Cluster/Sentinel |
 | **存储引擎** | Pebble（纯 Go LSM-tree），提供持久化、高吞吐的键值存储 |
 | **数据结构** | Redis 支持的数据类型：String, Hash, List, Set, Sorted Set 等 |
 | **RESP 协议** | Redis Serialization Protocol，支持 RESP2 和 RESP3 两个版本 |
