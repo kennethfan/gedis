@@ -59,12 +59,30 @@ run_both() {
   redis-cli -p "$REDIS_PORT" "$@" >> "$REDIS_OUT" 2>&1 || true
 }
 
-# SCAN 类：首行 cursor 原样，其余 key 行排序后比对（两侧全量 cursor 均为 0）。
+# SCAN 类：两侧各自循环扫到 cursor 归零后按集合比对（Redis cursor 非确定，
+# 分页走完语义由 Go 单测 Test_Scan_when_GlobalMatchType 覆盖）。
+scan_all() {
+  local port=$1
+  shift
+  local cursor=0
+  local out=""
+  local res
+  while :; do
+    res="$(redis-cli -p "$port" SCAN "$cursor" "$@" 2>&1 || true)"
+    cursor="$(echo "$res" | head -1)"
+    out="$out
+$(echo "$res" | tail -n +2)"
+    if [ "$cursor" = "0" ]; then
+      break
+    fi
+  done
+  echo "$out" | grep -v '^$' | sort
+}
 run_both_scan() {
-  echo "### $*" >> "$GEDIS_OUT"
-  echo "### $*" >> "$REDIS_OUT"
-  redis-cli -p "$GEDIS_PORT" "$@" 2>&1 | { read -r cur; echo "$cur"; sort; } >> "$GEDIS_OUT" || true
-  redis-cli -p "$REDIS_PORT" "$@" 2>&1 | { read -r cur; echo "$cur"; sort; } >> "$REDIS_OUT" || true
+  echo "### SCAN-LOOP $*" >> "$GEDIS_OUT"
+  echo "### SCAN-LOOP $*" >> "$REDIS_OUT"
+  scan_all "$GEDIS_PORT" "$@" >> "$GEDIS_OUT"
+  scan_all "$REDIS_PORT" "$@" >> "$REDIS_OUT"
 }
 
 # 全精度浮点：容差 1e-9 相对误差比对，日志仍落盘走精确 diff（值已在容差内则末位差会触发 diff，故此处只记命令头）。
@@ -125,11 +143,11 @@ run_both HSET h1 f v
 run_both RPUSH l1 e
 run_both SADD s1 m
 run_both ZADD z1 1 m
-run_both_scan SCAN 0
-run_both_scan SCAN 0 MATCH "s*"
-run_both_scan SCAN 0 TYPE zset
-run_both_scan SCAN 0 TYPE hash
-run_both_scan SCAN 0 TYPE string COUNT 100
+run_both_scan
+run_both_scan MATCH "s*"
+run_both_scan TYPE zset
+run_both_scan TYPE hash
+run_both_scan TYPE string COUNT 100
 run_both ZSCAN z1 0
 run_both ZSCAN z1 0 MATCH "m*"
 run_both SSCAN s1 0 MATCH "*"

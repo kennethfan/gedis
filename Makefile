@@ -15,6 +15,7 @@ compat:
 	@if command -v redis-server >/dev/null && command -v redis-cli >/dev/null; then \
 		./tests/redis-compat/zset.sh; \
 		./tests/redis-compat/geo-scan.sh; \
+		./tests/redis-compat/bitmap.sh; \
 	else \
 		echo "compat skipped: redis-server/redis-cli not found"; \
 	fi

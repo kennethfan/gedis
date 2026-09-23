@@ -85,6 +85,7 @@ func run() error {
 	commands.RegisterGeo(router, store)
 	commands.RegisterScan(router, store)
 	commands.RegisterGeneric(router, store)
+	commands.RegisterBitmap(router, store)
 	commands.RegisterMonitor(router, store, stats, hub)
 	commands.RegisterReplication(router, store, stats, hub)
 	commands.RegisterWriteCommands(router)
