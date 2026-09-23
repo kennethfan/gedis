@@ -6,7 +6,7 @@
 |------|------------|
 | **Gedis** | 基于 Pebble 的 Redis 兼容存储引擎，用 Go 实现 |
 | **Redis 兼容（目标）** | 完全兼容 Redis 协议和命令，可作为 drop-in 替换（验收以 `redis-cli` + 官方命令行为为准） |
-| **已兼容子集（现状）** | v1 已实现：String, Hash, List, Set（含 TTL/HEXPIRE、PSYNC 主从、LRU、INFO/SLOWLOG/Prometheus）；未实现：ZSet、Stream、HyperLogLog、Geo、Bitmap/bitops、事务/Lua、Pub/Sub、Cluster/Sentinel |
+| **已兼容子集（现状）** | v1 已实现：String, Hash, List, Set（含 TTL/HEXPIRE、PSYNC 主从、LRU、INFO/SLOWLOG/Prometheus）；M1 已交付：ZSet 全量（含 LEX/STORE/阻塞）+ Geo 套壳 + Bitmap 全量 + HLL 全量（dense-only）+ SCAN/TYPE 补齐；M2 已交付：Stream 全量（含消费组/PEL/阻塞读）；未实现：事务/Lua、Pub/Sub、Cluster/Sentinel |
 | **存储引擎** | Pebble（纯 Go LSM-tree），提供持久化、高吞吐的键值存储 |
 | **数据结构** | Redis 支持的数据类型：String, Hash, List, Set, Sorted Set 等 |
 | **RESP 协议** | Redis Serialization Protocol，支持 RESP2 和 RESP3 两个版本 |
@@ -30,7 +30,10 @@ Gedis 使用 Pebble 作为底层存储引擎，通过前缀方案在同一个 Pe
 - `h:` 前缀 - Hash 类型
 - `l:` 前缀 - List 类型
 - `st:` 前缀 - Set 类型
-- `z:` 前缀 - Sorted Set 类型
+- `z:` 前缀 - Sorted Set 类型（Geo 复用，score 存 geohash）
+- `x:` 前缀 - Stream 类型（含 PEL/消费组状态）
+- `hll:` 前缀 - HyperLogLog 类型（dense-only）
+- Bitmap 复用 `s:` 前缀（String 原生字节语义）
 
 ### 并发模型
 

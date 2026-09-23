@@ -95,7 +95,10 @@
   - `h:` 前缀 - Hash 类型
   - `l:` 前缀 - List 类型
   - `st:` 前缀 - Set 类型
-  - `z:` 前缀 - Sorted Set 类型
+  - `z:` 前缀 - Sorted Set 类型（Geo 复用，score 存 geohash）
+  - `x:` 前缀 - Stream 类型（含 PEL/消费组状态）
+  - `hll:` 前缀 - HyperLogLog 类型（dense-only）
+  - Bitmap 复用 `s:` 前缀（String 原生字节语义）
 
 ### 并发模型
 
@@ -170,8 +173,8 @@
 按照 ADR-0002 的实现计划（经 ADR-0004 调整为两期）：
 1. Phase 1 (v0.1)：核心功能 - String, Hash, List, Set 命令 ✅ 已交付
 2. Phase 2 (v0.2)：复制功能 - 主从复制，PSYNC 协议 ✅ 已交付
-3. Phase 3a / M1：数据结构补齐（不含 Stream）- ZSet 全量（含 LEX/STORE/阻塞）+ Geo 套壳 + Bitmap 全量 + HLL 全量 + SCAN/TYPE 补齐
-4. Phase 3b / M2（独立 Epic，见 ADR-0004）：Stream 全量 - base（XADD/XLEN/XRANGE/XREAD/XTRIM/XDEL/XINFO）+ 消费组（XREADGROUP/XACK/XCLAIM/XAUTOCLAIM/XPENDING + PEL + 阻塞读）
+3. Phase 3a / M1 ✅ 已交付：数据结构补齐（不含 Stream）- ZSet 全量（含 LEX/STORE/阻塞）+ Geo 套壳 + Bitmap 全量 + HLL 全量 + SCAN/TYPE 补齐
+4. Phase 3b / M2 ✅ 已交付（独立 Epic，见 ADR-0004）：Stream 全量 - base（XADD/XLEN/XRANGE/XREAD/XTRIM/XDEL/XINFO）+ 消费组（XREADGROUP/XACK/XCLAIM/XAUTOCLAIM/XPENDING + PEL + 阻塞读）
 5. Phase 4 (v1.0+)：生产就绪 - 完整监控，性能优化
 
 ### 参考项目
