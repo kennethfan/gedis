@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
@@ -14,7 +15,6 @@ import (
 func (h *streamHandler) registerInfo(r *network.Router) {
 	r.Register("XINFO", h.xinfo)
 	r.Register("XGROUP", h.xgroup)
-	r.Register("XACK", h.xack)
 }
 
 var nilBulk = protocol.Value{Kind: protocol.KindBulkString}
@@ -144,7 +144,7 @@ func (h *streamHandler) xinfoStream(ctx context.Context, args []protocol.Value) 
 	}
 	groups := make([]protocol.Value, 0, len(s.Groups))
 	for _, g := range s.Groups {
-		groups = append(groups, h.groupDetailValue(s, g))
+		groups = append(groups, h.groupDetailValue(s, g, count))
 	}
 	out = append(out,
 		protocol.BulkOf("entries"), protocol.Value{Kind: protocol.KindArray, Elems: entries},
@@ -153,7 +153,7 @@ func (h *streamHandler) xinfoStream(ctx context.Context, args []protocol.Value) 
 	return protocol.Value{Kind: protocol.KindArray, Elems: out}
 }
 
-func (h *streamHandler) groupDetailValue(s *datastruct.Stream, g *datastruct.StreamGroup) protocol.Value {
+func (h *streamHandler) groupDetailValue(s *datastruct.Stream, g *datastruct.StreamGroup, count int64) protocol.Value {
 	readV, lagV := nilBulk, nilBulk
 	if g.HasRead {
 		readV = protocol.Value{Kind: protocol.KindInteger, I: int64(g.EntriesRead)}
@@ -161,14 +161,51 @@ func (h *streamHandler) groupDetailValue(s *datastruct.Stream, g *datastruct.Str
 	if lag, ok := groupLag(s, g); ok {
 		lagV = protocol.Value{Kind: protocol.KindInteger, I: lag}
 	}
+	pending := make([]protocol.Value, 0, len(g.PEL))
+	for _, p := range g.PEL {
+		// FULL COUNT 同时截断组 pending（对标真 Redis）。
+		if count > 0 && int64(len(pending)) >= count {
+			break
+		}
+		pending = append(pending, protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
+			protocol.BulkOf(p.ID.String()),
+			protocol.BulkOf(p.Consumer),
+			protocol.Value{Kind: protocol.KindInteger, I: int64(p.DeliveryMs)},
+			protocol.Value{Kind: protocol.KindInteger, I: int64(p.Count)},
+		}})
+	}
 	consumers := make([]protocol.Value, 0, len(g.Consumers))
 	for _, c := range g.Consumers {
+		var cp []protocol.Value
+		var n int64
+		for _, p := range g.PEL {
+			if p.Consumer != c.Name {
+				continue
+			}
+			n++
+			// pel-count 记总数；COUNT 只截 pending 列表（对标真 Redis）。
+			if count > 0 && int64(len(cp)) >= count {
+				continue
+			}
+			cp = append(cp, protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
+				protocol.BulkOf(p.ID.String()),
+				protocol.Value{Kind: protocol.KindInteger, I: int64(p.DeliveryMs)},
+				protocol.Value{Kind: protocol.KindInteger, I: int64(p.Count)},
+			}})
+		}
+		if cp == nil {
+			cp = []protocol.Value{}
+		}
+		activeV := protocol.Value{Kind: protocol.KindInteger, I: -1}
+		if c.HasActive {
+			activeV = protocol.Value{Kind: protocol.KindInteger, I: int64(c.ActiveMs)}
+		}
 		consumers = append(consumers, protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
-			protocol.BulkOf("name"), protocol.BulkOf(c),
-			protocol.BulkOf("seen-time"), protocol.Value{Kind: protocol.KindInteger, I: 0},
-			protocol.BulkOf("active-time"), protocol.Value{Kind: protocol.KindInteger, I: -1},
-			protocol.BulkOf("pel-count"), protocol.Value{Kind: protocol.KindInteger, I: 0},
-			protocol.BulkOf("pending"), protocol.Value{Kind: protocol.KindArray},
+			protocol.BulkOf("name"), protocol.BulkOf(c.Name),
+			protocol.BulkOf("seen-time"), protocol.Value{Kind: protocol.KindInteger, I: int64(c.SeenMs)},
+			protocol.BulkOf("active-time"), activeV,
+			protocol.BulkOf("pel-count"), protocol.Value{Kind: protocol.KindInteger, I: n},
+			protocol.BulkOf("pending"), protocol.Value{Kind: protocol.KindArray, Elems: cp},
 		}})
 	}
 	return protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
@@ -176,8 +213,8 @@ func (h *streamHandler) groupDetailValue(s *datastruct.Stream, g *datastruct.Str
 		protocol.BulkOf("last-delivered-id"), protocol.BulkOf(g.LastID.String()),
 		protocol.BulkOf("entries-read"), readV,
 		protocol.BulkOf("lag"), lagV,
-		protocol.BulkOf("pel-count"), protocol.Value{Kind: protocol.KindInteger, I: 0},
-		protocol.BulkOf("pending"), protocol.Value{Kind: protocol.KindArray},
+		protocol.BulkOf("pel-count"), protocol.Value{Kind: protocol.KindInteger, I: int64(len(g.PEL))},
+		protocol.BulkOf("pending"), protocol.Value{Kind: protocol.KindArray, Elems: pending},
 		protocol.BulkOf("consumers"), protocol.Value{Kind: protocol.KindArray, Elems: consumers},
 	}}
 }
@@ -209,7 +246,7 @@ func (h *streamHandler) xinfoGroups(ctx context.Context, args []protocol.Value) 
 		out = append(out, protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
 			protocol.BulkOf("name"), protocol.BulkOf(g.Name),
 			protocol.BulkOf("consumers"), protocol.Value{Kind: protocol.KindInteger, I: int64(len(g.Consumers))},
-			protocol.BulkOf("pending"), protocol.Value{Kind: protocol.KindInteger, I: 0},
+			protocol.BulkOf("pending"), protocol.Value{Kind: protocol.KindInteger, I: int64(len(g.PEL))},
 			protocol.BulkOf("last-delivered-id"), protocol.BulkOf(g.LastID.String()),
 			protocol.BulkOf("entries-read"), readV,
 			protocol.BulkOf("lag"), lagV,
@@ -242,12 +279,27 @@ func (h *streamHandler) xinfoConsumers(ctx context.Context, args []protocol.Valu
 		return errValueStr(fmt.Sprintf("NOGROUP No such consumer group '%s' for key name '%s'", groupName, key))
 	}
 	out := make([]protocol.Value, 0, len(g.Consumers))
+	nowMs := uint64(time.Now().UnixMilli())
 	for _, c := range g.Consumers {
+		var n int64
+		for _, p := range g.PEL {
+			if p.Consumer == c.Name {
+				n++
+			}
+		}
+		idleV := protocol.Value{Kind: protocol.KindInteger, I: 0}
+		if c.SeenMs != 0 {
+			idleV = protocol.Value{Kind: protocol.KindInteger, I: int64(nowMs - c.SeenMs)}
+		}
+		inactiveV := protocol.Value{Kind: protocol.KindInteger, I: -1}
+		if c.HasActive {
+			inactiveV = protocol.Value{Kind: protocol.KindInteger, I: int64(nowMs - c.ActiveMs)}
+		}
 		out = append(out, protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
-			protocol.BulkOf("name"), protocol.BulkOf(c),
-			protocol.BulkOf("pending"), protocol.Value{Kind: protocol.KindInteger, I: 0},
-			protocol.BulkOf("idle"), protocol.Value{Kind: protocol.KindInteger, I: 0},
-			protocol.BulkOf("inactive"), protocol.Value{Kind: protocol.KindInteger, I: -1},
+			protocol.BulkOf("name"), protocol.BulkOf(c.Name),
+			protocol.BulkOf("pending"), protocol.Value{Kind: protocol.KindInteger, I: n},
+			protocol.BulkOf("idle"), idleV,
+			protocol.BulkOf("inactive"), inactiveV,
 		}})
 	}
 	return protocol.Value{Kind: protocol.KindArray, Elems: out}
@@ -499,11 +551,11 @@ func (h *streamHandler) xgroupCreateConsumer(ctx context.Context, args []protoco
 		return nogroupErr(groupName, key)
 	}
 	for _, c := range g.Consumers {
-		if c == consumer {
+		if c.Name == consumer {
 			return protocol.Value{Kind: protocol.KindInteger, I: 0}
 		}
 	}
-	g.Consumers = append(g.Consumers, consumer)
+	g.Consumers = append(g.Consumers, datastruct.StreamConsumer{Name: consumer, SeenMs: uint64(time.Now().UnixMilli())})
 	if werr := h.writeStream(ctx, key, s, expiry); werr != nil {
 		return errValue(werr)
 	}
@@ -534,41 +586,31 @@ func (h *streamHandler) xgroupDelConsumer(ctx context.Context, args []protocol.V
 	if g == nil {
 		return nogroupErr(groupName, key)
 	}
+	found := false
 	for i, c := range g.Consumers {
-		if c == consumer {
+		if c.Name == consumer {
 			g.Consumers = append(g.Consumers[:i], g.Consumers[i+1:]...)
-			if werr := h.writeStream(ctx, key, s, expiry); werr != nil {
-				return errValue(werr)
-			}
+			found = true
 			break
 		}
 	}
-	// M2-1 不跟踪 PEL：删消费者恒返丢弃 pending 数 0。
-	return protocol.Value{Kind: protocol.KindInteger, I: 0}
+	if !found {
+		return protocol.Value{Kind: protocol.KindInteger, I: 0}
+	}
+	// 删消费者同时丢弃其名下 pending，返丢弃数（M2-2 跟踪 PEL）。
+	var dropped int64
+	kept := g.PEL[:0]
+	for _, p := range g.PEL {
+		if p.Consumer == consumer {
+			dropped++
+			continue
+		}
+		kept = append(kept, p)
+	}
+	g.PEL = kept
+	if werr := h.writeStream(ctx, key, s, expiry); werr != nil {
+		return errValue(werr)
+	}
+	return protocol.Value{Kind: protocol.KindInteger, I: dropped}
 }
 
-// xack 是桩：缺 key 返 0，已存在非 stream 返 WRONGTYPE，只校验 ID 合法（M2-2 才跟踪 PEL）。
-func (h *streamHandler) xack(ctx context.Context, args []protocol.Value) protocol.Value {
-	if len(args) < 3 {
-		return errValueStr("ERR wrong number of arguments for 'xack' command")
-	}
-	key, ok := argString(args[0])
-	if !ok {
-		return errValueStr("ERR invalid key")
-	}
-	_, _, err := h.readStream(ctx, key)
-	if err != nil && !isNotFound(err) {
-		return errValue(err)
-	}
-	for _, a := range args[2:] {
-		s, ok := argString(a)
-		if !ok {
-			return errValueStr("ERR Invalid stream ID specified as stream command argument")
-		}
-		_, auto, err := datastruct.StreamParseID(s)
-		if err != nil || auto {
-			return errValueStr("ERR Invalid stream ID specified as stream command argument")
-		}
-	}
-	return protocol.Value{Kind: protocol.KindInteger, I: 0}
-}

@@ -48,7 +48,10 @@ func TestStreamCodecRoundtrip(t *testing.T) {
 	st.Added = 2
 	st.MaxDeleted = StreamID{Ms: 50, Seq: 0}
 	g := &StreamGroup{Name: "g1", LastID: StreamID{Ms: 100, Seq: 1}, EntriesRead: 1, HasRead: true}
-	g.Consumers = []string{"c1", "c2"}
+	g.Consumers = []StreamConsumer{
+		{Name: "c1", SeenMs: 1000, ActiveMs: 2000, HasActive: true},
+		{Name: "c2", SeenMs: 1500},
+	}
 	st.Groups = []*StreamGroup{g}
 	raw := EncodeStream(st)
 	got, err := DecodeStream(raw)
@@ -69,4 +72,19 @@ func TestStreamCodecTruncated(t *testing.T) {
 
 func TestStreamKey(t *testing.T) {
 	require.Equal(t, []byte("x:mykey"), StreamKey("mykey"))
+}
+
+func TestStreamGroupEnsureConsumer(t *testing.T) {
+	g := &StreamGroup{Name: "g"}
+	i := g.EnsureConsumer("c1", 1000)
+	require.Equal(t, 0, i)
+	require.Equal(t, uint64(1000), g.Consumers[0].SeenMs)
+	require.False(t, g.Consumers[0].HasActive)
+	// 已存在：不重置 seen，返回原下标。
+	j := g.EnsureConsumer("c1", 2000)
+	require.Equal(t, 0, j)
+	require.Equal(t, uint64(1000), g.Consumers[0].SeenMs)
+	require.Equal(t, 1, g.EnsureConsumer("c2", 3000))
+	require.Equal(t, -1, g.FindConsumer("nope"))
+	require.Equal(t, 1, g.FindConsumer("c2"))
 }

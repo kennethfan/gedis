@@ -61,6 +61,10 @@ func Test_Stream_when_ReadErrors(t *testing.T) {
 	got = dispatch(r, "XREAD", "STREAMS", "k")
 	require.Equal(t, protocol.KindError, got.Kind)
 	require.Contains(t, got.S, "wrong number of arguments")
+	// XREAD 遇 GROUP（选项位）→ wrong-number（对标真 Redis）。
+	got = dispatch(r, "XREAD", "GROUP", "g")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "wrong number of arguments for 'xread'")
 	got = dispatch(r, "XREAD", "STREAMS", "k1", "k2", "0-0")
 	require.Equal(t, protocol.KindError, got.Kind)
 	require.Contains(t, got.S, "Unbalanced")

@@ -78,13 +78,88 @@ type StreamEntry struct {
 	Fields []string
 }
 
-// StreamGroup 是消费组建制（M2-1 不跟踪 PEL）：最后投递 ID、已读计数、消费者名表。
-type StreamGroup struct {
+// StreamPEL 是一条 pending 记录：entry-id、属主消费者、最近投递时刻 ms、投递次数。
+type StreamPEL struct {
+	ID         StreamID
+	Consumer   string
+	DeliveryMs uint64
+	Count      uint64
+}
+
+// StreamConsumer 是组内消费者：名、首次出现时刻 seen-ms、
+// 最近一次 PEL 投递时刻（无投递时 HasActive=false，对应 inactive=-1）。
+type StreamConsumer struct {
 	Name      string
-	LastID    StreamID
+	SeenMs    uint64
+	ActiveMs  uint64
+	HasActive bool
+}
+
+// StreamGroup 是消费组：最后投递 ID、已读计数、消费者表、PEL。
+type StreamGroup struct {
+	Name        string
+	LastID      StreamID
 	EntriesRead uint64
-	HasRead   bool
-	Consumers []string
+	HasRead     bool
+	Consumers   []StreamConsumer
+	PEL         []*StreamPEL
+}
+
+// FindConsumer 按名找消费者，命中返回下标，未命中返回 -1。
+func (g *StreamGroup) FindConsumer(name string) int {
+	for i, c := range g.Consumers {
+		if c.Name == name {
+			return i
+		}
+	}
+	return -1
+}
+
+// EnsureConsumer 取或建消费者；新建时 SeenMs=now，不设 active。返回下标。
+func (g *StreamGroup) EnsureConsumer(name string, nowMs uint64) int {
+	if i := g.FindConsumer(name); i >= 0 {
+		return i
+	}
+	g.Consumers = append(g.Consumers, StreamConsumer{Name: name, SeenMs: nowMs})
+	return len(g.Consumers) - 1
+}
+
+// FindPEL 按 ID 找 pending 记录，未命中返回 nil。
+func (g *StreamGroup) FindPEL(id StreamID) *StreamPEL {
+	for _, p := range g.PEL {
+		if p.ID == id {
+			return p
+		}
+	}
+	return nil
+}
+
+// UpsertPEL 插入或替换 pending 记录，保持 PEL 按 ID 升序。
+func (g *StreamGroup) UpsertPEL(p *StreamPEL) {
+	for i, e := range g.PEL {
+		if e.ID == p.ID {
+			g.PEL[i] = p
+			return
+		}
+		if p.ID.Less(e.ID) {
+			g.PEL = append(g.PEL, nil)
+			copy(g.PEL[i+1:], g.PEL[i:])
+			g.PEL[i] = p
+			return
+		}
+	}
+	g.PEL = append(g.PEL, p)
+}
+
+// DelPEL 删除指定 ID 的 pending 记录，命中返回 true。
+func (g *StreamGroup) DelPEL(id StreamID) bool {
+	for i, e := range g.PEL {
+		if e.ID == id {
+			g.PEL = append(g.PEL[:i], g.PEL[i+1:]...)
+			return true
+		}
+	}
+	return false
 }
 
 // Stream 是内存中的 stream 全量：有序 entries + last-id + entries-added +
@@ -124,7 +199,10 @@ func EncodeStream(s *Stream) []byte {
 	for _, g := range s.Groups {
 		size += binary.MaxVarintLen64 + len(g.Name) + 4*binary.MaxVarintLen64 + 1
 		for _, c := range g.Consumers {
-			size += binary.MaxVarintLen64 + len(c)
+			size += 3*binary.MaxVarintLen64 + 1 + len(c.Name)
+		}
+		for _, p := range g.PEL {
+			size += 5*binary.MaxVarintLen64 + len(p.Consumer)
 		}
 	}
 	out := make([]byte, 0, size)
@@ -162,8 +240,24 @@ func EncodeStream(s *Stream) []byte {
 		out = binary.AppendUvarint(out, g.EntriesRead)
 		out = binary.AppendUvarint(out, uint64(len(g.Consumers)))
 		for _, c := range g.Consumers {
-			out = binary.AppendUvarint(out, uint64(len(c)))
-			out = append(out, c...)
+			out = binary.AppendUvarint(out, uint64(len(c.Name)))
+			out = append(out, c.Name...)
+			out = binary.AppendUvarint(out, c.SeenMs)
+			if c.HasActive {
+				out = binary.AppendUvarint(out, 1)
+			} else {
+				out = binary.AppendUvarint(out, 0)
+			}
+			out = binary.AppendUvarint(out, c.ActiveMs)
+		}
+		out = binary.AppendUvarint(out, uint64(len(g.PEL)))
+		for _, p := range g.PEL {
+			out = binary.AppendUvarint(out, p.ID.Ms)
+			out = binary.AppendUvarint(out, p.ID.Seq)
+			out = binary.AppendUvarint(out, uint64(len(p.Consumer)))
+			out = append(out, p.Consumer...)
+			out = binary.AppendUvarint(out, p.DeliveryMs)
+			out = binary.AppendUvarint(out, p.Count)
 		}
 	}
 	return out
@@ -253,11 +347,45 @@ func DecodeStream(raw []byte) (*Stream, error) {
 			return bad()
 		}
 		for j := uint64(0); j < nc; j++ {
-			var c string
-			if c, rest, ok = readStreamStr(rest); !ok {
+			var c StreamConsumer
+			if c.Name, rest, ok = readStreamStr(rest); !ok {
+				return bad()
+			}
+			if c.SeenMs, rest, ok = readUvarint(rest); !ok {
+				return bad()
+			}
+			var ha uint64
+			if ha, rest, ok = readUvarint(rest); !ok {
+				return bad()
+			}
+			c.HasActive = ha != 0
+			if c.ActiveMs, rest, ok = readUvarint(rest); !ok {
 				return bad()
 			}
 			g.Consumers = append(g.Consumers, c)
+		}
+		var np uint64
+		if np, rest, ok = readUvarint(rest); !ok {
+			return bad()
+		}
+		for j := uint64(0); j < np; j++ {
+			p := &StreamPEL{}
+			if p.ID.Ms, rest, ok = readUvarint(rest); !ok {
+				return bad()
+			}
+			if p.ID.Seq, rest, ok = readUvarint(rest); !ok {
+				return bad()
+			}
+			if p.Consumer, rest, ok = readStreamStr(rest); !ok {
+				return bad()
+			}
+			if p.DeliveryMs, rest, ok = readUvarint(rest); !ok {
+				return bad()
+			}
+			if p.Count, rest, ok = readUvarint(rest); !ok {
+				return bad()
+			}
+			g.PEL = append(g.PEL, p)
 		}
 		s.Groups = append(s.Groups, g)
 	}

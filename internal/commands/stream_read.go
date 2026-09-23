@@ -64,6 +64,10 @@ func (h *streamHandler) xread(ctx context.Context, args []protocol.Value) protoc
 			block = ms
 			i += 2
 		default:
+			// XREAD 无 GROUP；选项位出现 GROUP → wrong-number（对标真 Redis）。
+			if strings.EqualFold(opt, "GROUP") {
+				return errValueStr("ERR wrong number of arguments for 'xread' command")
+			}
 			goto streams
 		}
 	}

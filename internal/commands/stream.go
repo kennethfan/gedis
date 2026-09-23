@@ -22,6 +22,9 @@ func RegisterStream(r *network.Router, kv KV, stats *network.Stats) {
 	h.registerRead(r)
 	h.registerTrim(r)
 	h.registerInfo(r)
+	h.registerGroup(r)
+	h.registerClaim(r)
+	h.registerXClaim(r)
 }
 
 type streamHandler struct {
