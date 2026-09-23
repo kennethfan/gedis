@@ -19,6 +19,7 @@ compat:
 		./tests/redis-compat/hll.sh; \
 		./tests/redis-compat/stream-base.sh; \
 		./tests/redis-compat/stream-group.sh; \
+		./tests/redis-compat/txn.sh; \
 	else \
 		echo "compat skipped: redis-server/redis-cli not found"; \
 	fi
