@@ -87,6 +87,7 @@ func run() error {
 	commands.RegisterGeneric(router, store)
 	commands.RegisterBitmap(router, store)
 	commands.RegisterHLL(router, store)
+	commands.RegisterStream(router, store, stats)
 	commands.RegisterMonitor(router, store, stats, hub)
 	commands.RegisterReplication(router, store, stats, hub)
 	commands.RegisterWriteCommands(router)

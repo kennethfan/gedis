@@ -22,6 +22,7 @@ func WriteCommandSet() map[string]bool {
 		"COPY", "RENAME", "RENAMENX", "SORT",
 		"SETBIT", "BITOP", "BITFIELD",
 		"PFADD", "PFMERGE",
+		"XADD", "XTRIM", "XDEL", "XGROUP",
 		"EXPIRE", "PEXPIRE", "EXPIREAT", "PEXPIREAT", "PERSIST",
 	}
 	out := make(map[string]bool, len(names))

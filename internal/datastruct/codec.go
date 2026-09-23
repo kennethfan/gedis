@@ -12,6 +12,7 @@ const (
 	TypeSet    byte = 't'
 	TypeZSet   byte = 'z'
 	TypeHLL    byte = 'H'
+	TypeStream byte = 'x'
 )
 
 const headerLen = 9
