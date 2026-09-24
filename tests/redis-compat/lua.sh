@@ -169,6 +169,23 @@ run_both EVAL "return cjson.decode('[1}]')" 0
 run_both SCRIPT KILL
 run_both SCRIPT KILL extra
 
+# 脚本内禁用命令：noscript 否决集 + XREAD BLOCK 专属文案（同体 EVAL → 同 sha 可比；
+# SHUTDOWN 在脚本内只返回错误、不会真关机，上方探针已确认两侧存活）
+run_both EVAL "return redis.call('subscribe','c')" 0
+run_both EVAL "return redis.call('unsubscribe','c')" 0
+run_both EVAL "return redis.call('psubscribe','p*')" 0
+run_both EVAL "return redis.call('multi')" 0
+run_both EVAL "return redis.call('eval','return 1','0')" 0
+run_both EVAL "return redis.call('evalsha','0000000000000000000000000000000000000000','0')" 0
+run_both EVAL "return redis.call('config','get','maxclients')" 0
+run_both EVAL "return redis.call('quit')" 0
+run_both EVAL "return redis.call('shutdown')" 0
+run_both EVAL "return redis.call('subscribe')" 0
+run_both EVAL "local ok,err=pcall(redis.call,'subscribe','c'); return err" 0
+run_both EVAL "return redis.call('publish','ch','m')" 0
+run_both XADD sk 1-1 f v
+run_both EVAL "return redis.call('xread','BLOCK',100,'STREAMS','sk','0-0')" 0
+
 # kill_clean: $1=port $2=side-out : 后台 EVAL 死循环，重试 KILL 直到 OK（收敛掉
 # EVAL 注册前的 NOTBUSY 空窗），只记录终态 KILL 回复 + EVAL 侧输出
 kill_clean() {

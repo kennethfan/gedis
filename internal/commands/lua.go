@@ -414,6 +414,31 @@ func luaStatusReply(L *lua.LState) int {
 // luaWriteCmds 复用写命令集合做 KILL 脏标记（包级单例，WriteCommandSet 每次新建 map）。
 var luaWriteCmds = WriteCommandSet()
 
+// luaNoScriptCmds 与真机 noscript 标记对齐：脚本内禁用（大小写不敏感）。
+// 含 gedis 未实现的命令（QUIT/RESET/CONFIG 等）：查表先于 Handler，文案与真机一致。
+var luaNoScriptCmds = map[string]struct{}{
+	"SUBSCRIBE": {}, "UNSUBSCRIBE": {}, "PSUBSCRIBE": {}, "PUNSUBSCRIBE": {},
+	"MONITOR": {}, "QUIT": {}, "RESET": {},
+	"MULTI": {}, "EXEC": {}, "DISCARD": {}, "WATCH": {}, "UNWATCH": {},
+	"EVAL": {}, "EVALSHA": {}, "SCRIPT": {},
+	"CONFIG": {}, "DEBUG": {}, "SHUTDOWN": {}, "CLIENT": {}, "ACL": {},
+}
+
+// hasBlockOption 识别 XREAD 的 BLOCK 选项：STREAMS 之前的 BLOCK（大小写不敏感）
+// 为选项，STREAMS 之后的是流名（真机按序解析，流可叫 block）。
+func hasBlockOption(elems []protocol.Value) bool {
+	for _, el := range elems {
+		s := string(el.Bulk)
+		if strings.EqualFold(s, "STREAMS") {
+			return false
+		}
+		if strings.EqualFold(s, "BLOCK") {
+			return true
+		}
+	}
+	return false
+}
+
 // luaCall 实现 redis.call/pcall：直调 Router.Handler，错误在 call 下 raise、pcall 下装 {err} 表。
 // 写命令实际分发即标脏（回复错误也算；未知命令/arity 等分发前拒绝的不脏）。
 func (e *luaExec) luaCall(ctx context.Context, pcall bool, rr *luaRun) lua.LGFunction {
@@ -421,10 +446,6 @@ func (e *luaExec) luaCall(ctx context.Context, pcall bool, rr *luaRun) lua.LGFun
 		top := L.GetTop()
 		nameV := L.Get(1)
 		nameStr, ok := nameV.(lua.LString)
-		if !ok {
-			return e.raiseOrTable(L, pcall, "ERR Unknown Redis command called from script")
-		}
-		h, ok := e.router.Handler(string(nameStr))
 		if !ok {
 			return e.raiseOrTable(L, pcall, "ERR Unknown Redis command called from script")
 		}
@@ -444,6 +465,16 @@ func (e *luaExec) luaCall(ctx context.Context, pcall bool, rr *luaRun) lua.LGFun
 			if !checkArity(arity, len(elems)+1) {
 				return e.raiseOrTable(L, pcall, "ERR Wrong number of args calling Redis command from script")
 			}
+		}
+		if _, denied := luaNoScriptCmds[upName]; denied {
+			return e.raiseOrTable(L, pcall, "ERR This Redis command is not allowed from script")
+		}
+		if upName == "XREAD" && hasBlockOption(elems) {
+			return e.raiseOrTable(L, pcall, "ERR "+string(nameStr)+" command is not allowed with BLOCK option from scripts")
+		}
+		h, ok := e.router.Handler(string(nameStr))
+		if !ok {
+			return e.raiseOrTable(L, pcall, "ERR Unknown Redis command called from script")
 		}
 		if luaWriteCmds[upName] {
 			e.reg.markDirty(rr)

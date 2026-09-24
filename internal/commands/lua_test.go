@@ -27,6 +27,8 @@ func openLuaSetupWithTimeout(t testing.TB, timeout time.Duration) (*network.Rout
 	r := network.NewRouter()
 	RegisterStrings(r, store)
 	RegisterList(r, store, nil)
+	RegisterStream(r, store, nil)
+	RegisterPubSub(r)
 	RegisterLua(r, timeout)
 	RegisterTxn(r, hub)
 	srv, _ := net.Pipe()
@@ -260,6 +262,64 @@ func Test_Lua_when_ScriptKillAfterWrite(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("unkillable EVAL did not hit timeout backstop")
 	}
+}
+
+// WM: 脚本内禁用命令（真机 noscript 对齐）：call 直接错、pcall 装 {err}、放行命令不受影响
+func Test_Lua_when_NoScriptDenied(t *testing.T) {
+	r, c := openLuaSetup(t)
+	denied := "This Redis command is not allowed from script"
+	for _, script := range []string{
+		"return redis.call('SUBSCRIBE','ch')",
+		"return redis.call('subscribe','ch')",
+		"return redis.call('UNSUBSCRIBE','ch')",
+		"return redis.call('PSUBSCRIBE','p*')",
+		"return redis.call('PUNSUBSCRIBE','p*')",
+		"return redis.call('MONITOR')",
+		"return redis.call('MULTI')",
+		"return redis.call('EXEC')",
+		"return redis.call('DISCARD')",
+		"return redis.call('WATCH','k')",
+		"return redis.call('UNWATCH')",
+		"return redis.call('EVAL','return 1','0')",
+		"return redis.call('EVALSHA','abcdef','0')",
+		"return redis.call('SCRIPT','FLUSH')",
+		"return redis.call('QUIT')",
+	} {
+		got := dispatchLua(r, c, "EVAL", script, "0")
+		require.Equal(t, protocol.KindError, got.Kind, script)
+		require.Contains(t, got.S, denied, script)
+	}
+
+	// XREAD + BLOCK 是另一条专属文案（真机原文，scripts 复数）
+	for _, script := range []string{
+		"return redis.call('XREAD','BLOCK',0,'STREAMS','s','$')",
+		"return redis.call('XREAD','COUNT',1,'BLOCK',0,'STREAMS','s','$')",
+	} {
+		got := dispatchLua(r, c, "EVAL", script, "0")
+		require.Equal(t, protocol.KindError, got.Kind, script)
+		require.Contains(t, got.S, "XREAD command is not allowed with BLOCK option from scripts", script)
+	}
+	// arity 先于禁用检查（真机行为）：SUBSCRIBE 无参报 arity 错
+	got := dispatchLua(r, c, "EVAL", "return redis.call('SUBSCRIBE')", "0")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "Wrong number of args calling Redis command from script")
+
+	// pcall 把原文装进 {err} 表（r.err 为 bulk）
+	got = dispatchLua(r, c, "EVAL", "local r=redis.pcall('SUBSCRIBE','ch'); return r.err", "0")
+	require.Equal(t, protocol.BulkOf("ERR "+denied), got)
+
+	// 放行回归：PUBLISH/XREAD（STREAMS 后的 block 是流名）照常分发
+	require.Equal(t, intVal(0), dispatchLua(r, c, "EVAL", "return redis.call('PUBLISH','ch','hi')", "0"))
+}
+
+// WM: hasBlockOption 只认 STREAMS 之前的 BLOCK
+func Test_Lua_when_HasBlockOption(t *testing.T) {
+	bulk := func(s string) protocol.Value { return protocol.BulkOf(s) }
+	require.True(t, hasBlockOption([]protocol.Value{bulk("BLOCK"), bulk("0"), bulk("STREAMS"), bulk("s"), bulk("$")}))
+	require.True(t, hasBlockOption([]protocol.Value{bulk("block"), bulk("0"), bulk("streams"), bulk("s")}))
+	require.False(t, hasBlockOption([]protocol.Value{bulk("STREAMS"), bulk("block"), bulk("0")}))
+	require.False(t, hasBlockOption([]protocol.Value{bulk("COUNT"), bulk("1"), bulk("STREAMS"), bulk("s"), bulk("0")}))
+	require.False(t, hasBlockOption(nil))
 }
 
 // WM: 可配置超时生效（100ms 中断死循环）
