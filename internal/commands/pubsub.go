@@ -26,14 +26,20 @@ type PubSubRegistry struct {
 }
 
 type pubsubSession struct {
-	subs   map[string]struct{}
-	order  []string
-	ch     chan protocol.Value
-	sender bool
-	closed bool
+	subs     map[string]struct{}
+	order    []string
+	patterns map[string]struct{}
+	porder   []string
+	ch       chan protocol.Value
+	sender   bool
+	closed   bool
 }
 
-// subModeAllowed 订阅态放行的命令（含未实现的 P(S)SUBSCRIBE/QUIT/RESET：透传给正常分发）。
+func (s *pubsubSession) total() int {
+	return len(s.subs) + len(s.patterns)
+}
+
+// subModeAllowed 订阅态放行的命令（QUIT/RESET 未实现：透传给正常分发）。
 var subModeAllowed = map[string]bool{
 	"SUBSCRIBE": true, "UNSUBSCRIBE": true, "PSUBSCRIBE": true, "PUNSUBSCRIBE": true,
 	"PING": true, "QUIT": true, "RESET": true,
@@ -44,6 +50,8 @@ func RegisterPubSub(r *network.Router) *PubSubRegistry {
 	reg := &PubSubRegistry{sessions: make(map[net.Conn]*pubsubSession)}
 	r.Register("SUBSCRIBE", reg.handleSubscribe)
 	r.Register("UNSUBSCRIBE", reg.handleUnsubscribe)
+	r.Register("PSUBSCRIBE", reg.handlePsubscribe)
+	r.Register("PUNSUBSCRIBE", reg.handlePunsubscribe)
 	r.Register("PUBLISH", reg.handlePublish)
 	if pingH, ok := r.Handler("PING"); ok {
 		r.Register("PING", reg.wrapPing(pingH))
@@ -83,7 +91,7 @@ func (reg *PubSubRegistry) intercept(ctx context.Context, cmd protocol.Value) (p
 	sess, has := reg.sessions[conn]
 	n := 0
 	if has {
-		n = len(sess.subs)
+		n = sess.total()
 	}
 	reg.mu.Unlock()
 	if n == 0 {
@@ -96,10 +104,20 @@ func (reg *PubSubRegistry) intercept(ctx context.Context, cmd protocol.Value) (p
 func (reg *PubSubRegistry) sessionLocked(conn net.Conn) *pubsubSession {
 	sess, ok := reg.sessions[conn]
 	if !ok {
-		sess = &pubsubSession{subs: make(map[string]struct{})}
+		sess = &pubsubSession{subs: make(map[string]struct{}), patterns: make(map[string]struct{})}
 		reg.sessions[conn] = sess
 	}
 	return sess
+}
+
+func (reg *PubSubRegistry) ensureSenderLocked(conn net.Conn, sess *pubsubSession) {
+	if sess.sender && !sess.closed {
+		return
+	}
+	sess.ch = make(chan protocol.Value, 64)
+	sess.closed = false
+	sess.sender = true
+	go runSender(conn, sess.ch)
 }
 
 func (reg *PubSubRegistry) stopSenderLocked(sess *pubsubSession) {
@@ -117,7 +135,20 @@ func (reg *PubSubRegistry) removeLocked(sess *pubsubSession, channel string) {
 			break
 		}
 	}
-	if len(sess.subs) == 0 {
+	if sess.total() == 0 {
+		reg.stopSenderLocked(sess)
+	}
+}
+
+func (reg *PubSubRegistry) removePatternLocked(sess *pubsubSession, pattern string) {
+	delete(sess.patterns, pattern)
+	for i, p := range sess.porder {
+		if p == pattern {
+			sess.porder = append(sess.porder[:i], sess.porder[i+1:]...)
+			break
+		}
+	}
+	if sess.total() == 0 {
 		reg.stopSenderLocked(sess)
 	}
 }
@@ -156,16 +187,12 @@ func (reg *PubSubRegistry) handleSubscribe(ctx context.Context, args []protocol.
 	confs := make([]protocol.Value, 0, len(args))
 	for _, a := range args {
 		channel := string(a.Bulk)
-		if len(sess.subs) == 0 && !sess.sender {
-			sess.ch = make(chan protocol.Value, 64)
-			sess.sender = true
-			go runSender(conn, sess.ch)
-		}
+		reg.ensureSenderLocked(conn, sess)
 		if _, dup := sess.subs[channel]; !dup {
 			sess.subs[channel] = struct{}{}
 			sess.order = append(sess.order, channel)
 		}
-		confs = append(confs, confirm("subscribe", channel, int64(len(sess.subs))))
+		confs = append(confs, confirm("subscribe", channel, int64(sess.total())))
 	}
 	reg.mu.Unlock()
 	return reg.emitConfs(ctx, conn, confs)
@@ -203,7 +230,70 @@ func (reg *PubSubRegistry) handleUnsubscribe(ctx context.Context, args []protoco
 		confs = append(confs, protocol.ArrayOf(
 			protocol.BulkOf("unsubscribe"),
 			protocol.BulkOf(channel),
-			protocol.Value{Kind: protocol.KindInteger, I: int64(len(sess.subs))},
+			protocol.Value{Kind: protocol.KindInteger, I: int64(sess.total())},
+		))
+	}
+	reg.mu.Unlock()
+	return reg.emitConfs(ctx, conn, confs)
+}
+
+func (reg *PubSubRegistry) handlePsubscribe(ctx context.Context, args []protocol.Value) protocol.Value {
+	if len(args) < 1 {
+		return errValueStr("ERR wrong number of arguments for 'psubscribe' command")
+	}
+	conn, errReply := reg.connOf(ctx)
+	if errReply != nil {
+		return *errReply
+	}
+	reg.mu.Lock()
+	sess := reg.sessionLocked(conn)
+	confs := make([]protocol.Value, 0, len(args))
+	for _, a := range args {
+		pattern := string(a.Bulk)
+		reg.ensureSenderLocked(conn, sess)
+		if _, dup := sess.patterns[pattern]; !dup {
+			sess.patterns[pattern] = struct{}{}
+			sess.porder = append(sess.porder, pattern)
+		}
+		confs = append(confs, confirm("psubscribe", pattern, int64(sess.total())))
+	}
+	reg.mu.Unlock()
+	return reg.emitConfs(ctx, conn, confs)
+}
+
+func (reg *PubSubRegistry) handlePunsubscribe(ctx context.Context, args []protocol.Value) protocol.Value {
+	conn, errReply := reg.connOf(ctx)
+	if errReply != nil {
+		return *errReply
+	}
+	reg.mu.Lock()
+	sess := reg.sessionLocked(conn)
+	var targets []string
+	if len(args) == 0 {
+		targets = make([]string, len(sess.porder))
+		for i, p := range sess.porder {
+			targets[len(sess.porder)-1-i] = p
+		}
+	} else {
+		targets = make([]string, 0, len(args))
+		for _, a := range args {
+			targets = append(targets, string(a.Bulk))
+		}
+	}
+	confs := make([]protocol.Value, 0, len(targets))
+	if len(targets) == 0 {
+		confs = append(confs, protocol.ArrayOf(
+			protocol.BulkOf("punsubscribe"),
+			protocol.Value{Kind: protocol.KindBulkString},
+			protocol.Value{Kind: protocol.KindInteger, I: 0},
+		))
+	}
+	for _, pattern := range targets {
+		reg.removePatternLocked(sess, pattern)
+		confs = append(confs, protocol.ArrayOf(
+			protocol.BulkOf("punsubscribe"),
+			protocol.BulkOf(pattern),
+			protocol.Value{Kind: protocol.KindInteger, I: int64(sess.total())},
 		))
 	}
 	reg.mu.Unlock()
@@ -215,23 +305,48 @@ func (reg *PubSubRegistry) handlePublish(ctx context.Context, args []protocol.Va
 		return errValueStr("ERR wrong number of arguments for 'publish' command")
 	}
 	channel := string(args[0].Bulk)
-	msg := protocol.ArrayOf(
-		protocol.BulkOf("message"),
-		protocol.BulkOf(channel),
-		args[1],
-	)
+	payload := args[1]
 	reg.mu.Lock()
-	var targets []chan protocol.Value
+	type delivery struct {
+		ch   chan protocol.Value
+		msgs []protocol.Value
+	}
+	var targets []delivery
+	count := int64(0)
 	for _, sess := range reg.sessions {
-		if _, ok := sess.subs[channel]; ok && sess.sender && !sess.closed {
-			targets = append(targets, sess.ch)
+		if !sess.sender || sess.closed {
+			continue
+		}
+		var msgs []protocol.Value
+		if _, ok := sess.subs[channel]; ok {
+			msgs = append(msgs, protocol.ArrayOf(
+				protocol.BulkOf("message"),
+				protocol.BulkOf(channel),
+				payload,
+			))
+		}
+		for _, pat := range sess.porder {
+			if matchPattern(pat, channel) {
+				msgs = append(msgs, protocol.ArrayOf(
+					protocol.BulkOf("pmessage"),
+					protocol.BulkOf(pat),
+					protocol.BulkOf(channel),
+					payload,
+				))
+			}
+		}
+		if len(msgs) > 0 {
+			targets = append(targets, delivery{ch: sess.ch, msgs: msgs})
+			count += int64(len(msgs))
 		}
 	}
 	reg.mu.Unlock()
-	for _, ch := range targets {
-		ch <- msg
+	for _, d := range targets {
+		for _, m := range d.msgs {
+			d.ch <- m
+		}
 	}
-	return protocol.Value{Kind: protocol.KindInteger, I: int64(len(targets))}
+	return protocol.Value{Kind: protocol.KindInteger, I: count}
 }
 
 // emitConfs 按执行路径决定确认数组形状：EXEC 回放返回 FIRST、直写其余；
@@ -263,7 +378,7 @@ func (reg *PubSubRegistry) wrapPing(next network.Handler) network.Handler {
 		sess, has := reg.sessions[conn]
 		n := 0
 		if has {
-			n = len(sess.subs)
+			n = sess.total()
 		}
 		reg.mu.Unlock()
 		if n == 0 {

@@ -155,3 +155,86 @@ func Test_PubSub_when_ConnClosedCleansUp(t *testing.T) {
 	reg.ConnClosed(srvA)
 	require.Equal(t, int64(0), dispatchPub(r, srvB, "PUBLISH", "c1", "v").I)
 }
+
+// WM: SUB c1 后 PSUBSCRIBE p* → 混合计数 2；重复 PSUB 计数不变
+func Test_PubSub_when_PsubscribeMixedCount(t *testing.T) {
+	r, _, srvA, cliA, _, _ := openPubSubSetup(t)
+	require.Equal(t, confirmKind("c1", 1, "subscribe"), dispatchPub(r, srvA, "SUBSCRIBE", "c1"))
+	type result struct{ v protocol.Value }
+	ch := make(chan result, 1)
+	go func() { ch <- result{dispatchPub(r, srvA, "PSUBSCRIBE", "p*")} }()
+	require.Equal(t, confirmKind("p*", 2, "psubscribe"), (<-ch).v)
+	_ = cliA
+	require.Equal(t, confirmKind("p*", 2, "psubscribe"), dispatchPub(r, srvA, "PSUBSCRIBE", "p*"))
+}
+
+// WM: A PSUBSCRIBE c*；B PUBLISH c1 v → :1；A 收到 [pmessage, c*, c1, v]
+func Test_PubSub_when_PatternDelivers(t *testing.T) {
+	r, _, srvA, cliA, srvB, _ := openPubSubSetup(t)
+	require.Equal(t, confirmKind("c*", 1, "psubscribe"), dispatchPub(r, srvA, "PSUBSCRIBE", "c*"))
+	require.Equal(t, int64(1), dispatchPub(r, srvB, "PUBLISH", "c1", "v").I)
+	require.Equal(t, protocol.ArrayOf(
+		protocol.BulkOf("pmessage"),
+		protocol.BulkOf("c*"),
+		protocol.BulkOf("c1"),
+		protocol.BulkOf("v"),
+	), readPushed(t, cliA))
+	require.Equal(t, int64(0), dispatchPub(r, srvB, "PUBLISH", "zzz", "v").I)
+}
+
+// WM: 同连接频道+pattern 双命中 → PUBLISH :2，先 message 后 pmessage（真机顺序）
+func Test_PubSub_when_ChannelAndPatternBothHit(t *testing.T) {
+	r, _, srvA, cliA, srvB, _ := openPubSubSetup(t)
+	dispatchPub(r, srvA, "SUBSCRIBE", "c1")
+	dispatchPub(r, srvA, "PSUBSCRIBE", "c*")
+	require.Equal(t, int64(2), dispatchPub(r, srvB, "PUBLISH", "c1", "hi").I)
+	require.Equal(t, protocol.ArrayOf(
+		protocol.BulkOf("message"), protocol.BulkOf("c1"), protocol.BulkOf("hi"),
+	), readPushed(t, cliA))
+	require.Equal(t, protocol.ArrayOf(
+		protocol.BulkOf("pmessage"), protocol.BulkOf("c*"), protocol.BulkOf("c1"), protocol.BulkOf("hi"),
+	), readPushed(t, cliA))
+}
+
+// WM: PSUB a* b* 后裸 PUNSUBSCRIBE → 逆序 b*:1、a*:0；零 pattern 裸退订回 [punsubscribe nil 0]
+func Test_PubSub_when_PunsubscribeAllReversed(t *testing.T) {
+	r, _, srvA, cliA, _, _ := openPubSubSetup(t)
+	type result struct{ v protocol.Value }
+	sub := make(chan result, 1)
+	go func() { sub <- result{dispatchPub(r, srvA, "PSUBSCRIBE", "a*", "b*")} }()
+	require.Equal(t, confirmKind("a*", 1, "psubscribe"), readPushed(t, cliA))
+	require.Equal(t, confirmKind("b*", 2, "psubscribe"), (<-sub).v)
+	unsub := make(chan result, 1)
+	go func() { unsub <- result{dispatchPub(r, srvA, "PUNSUBSCRIBE")} }()
+	require.Equal(t, confirmKind("b*", 1, "punsubscribe"), readPushed(t, cliA))
+	require.Equal(t, confirmKind("a*", 0, "punsubscribe"), (<-unsub).v)
+	require.Equal(t, protocol.ArrayOf(
+		protocol.BulkOf("punsubscribe"),
+		protocol.Value{Kind: protocol.KindBulkString},
+		protocol.Value{Kind: protocol.KindInteger, I: 0},
+	), dispatchPub(r, srvA, "PUNSUBSCRIBE"))
+}
+
+// WM: UNSUB/PUNSUB 命名空间独立：裸 UNSUB 只清频道（仍订阅态），裸 PUNSUB 只清 pattern（退回正常态）
+func Test_PubSub_when_UnsubNamespacesIndependent(t *testing.T) {
+	r, _, srvA, _, _, _ := openPubSubSetup(t)
+	dispatchPub(r, srvA, "SUBSCRIBE", "c1")
+	dispatchPub(r, srvA, "PSUBSCRIBE", "p*")
+	require.Equal(t, confirmKind("c1", 1, "unsubscribe"), dispatchPub(r, srvA, "UNSUBSCRIBE"))
+	require.Equal(t, protocol.ArrayOf(protocol.BulkOf("pong"), protocol.BulkOf("")),
+		dispatchPub(r, srvA, "PING"))
+	require.Equal(t, confirmKind("p*", 0, "punsubscribe"), dispatchPub(r, srvA, "PUNSUBSCRIBE"))
+	require.Equal(t, "PONG", dispatchPub(r, srvA, "PING").S)
+}
+
+// WM: 全退订后重订阅仍可投递（sender 重建；回归：曾往已 close 的 ch 发送 panic）
+func Test_PubSub_when_ResubscribeAfterFullUnsub(t *testing.T) {
+	r, _, srvA, cliA, srvB, _ := openPubSubSetup(t)
+	dispatchPub(r, srvA, "SUBSCRIBE", "c1")
+	dispatchPub(r, srvA, "UNSUBSCRIBE", "c1")
+	require.Equal(t, confirmKind("c1", 1, "subscribe"), dispatchPub(r, srvA, "SUBSCRIBE", "c1"))
+	require.Equal(t, int64(1), dispatchPub(r, srvB, "PUBLISH", "c1", "v").I)
+	require.Equal(t, protocol.ArrayOf(
+		protocol.BulkOf("message"), protocol.BulkOf("c1"), protocol.BulkOf("v"),
+	), readPushed(t, cliA))
+}
