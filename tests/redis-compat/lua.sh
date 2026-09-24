@@ -12,6 +12,9 @@ GEDIS_OUT="$TMP/gedis.out"
 REDIS_OUT="$TMP/redis.out"
 
 cleanup() {
+  # UNKILLABLE 场景会在真机上留一个永不结束的脏脚本（BUSY 态，trap 的 kill 收不掉），
+  # 先 SHUTDOWN NOSAVE（BUSY 态仍允许）放倒它，避免污染端口的下一次运行。
+  redis-cli -p "$REDIS_PORT" SHUTDOWN NOSAVE >/dev/null 2>&1 || true
   kill "$GEDIS_PID" "$REDIS_PID" 2>/dev/null || true
   rm -rf "$TMP"
 }
@@ -133,6 +136,53 @@ echo "### COMPILE" >> "$GEDIS_OUT"
 echo "### COMPILE" >> "$REDIS_OUT"
 redis-cli -p "$GEDIS_PORT" EVAL "return {{{" 0 2>&1 | sed 's/user_script.*/user_script NORM/' >> "$GEDIS_OUT" || true
 redis-cli -p "$REDIS_PORT" EVAL "return {{{" 0 2>&1 | sed 's/user_script.*/user_script NORM/' >> "$REDIS_OUT" || true
+
+# SCRIPT KILL：NOTBUSY 与 arity 为确定性对照
+run_both SCRIPT KILL
+run_both SCRIPT KILL extra
+
+# kill_clean: $1=port $2=side-out : 后台 EVAL 死循环，重试 KILL 直到 OK（收敛掉
+# EVAL 注册前的 NOTBUSY 空窗），只记录终态 KILL 回复 + EVAL 侧输出
+kill_clean() {
+  local port=$1 out=$2
+  echo "### KILL-CLEAN" >> "$out"
+  redis-cli -p "$port" EVAL "while true do end return 1" 0 > "$TMP/eval_$port.out" 2>&1 &
+  local pid=$!
+  local reply=""
+  for _ in $(seq 1 100); do
+    reply=$(redis-cli -p "$port" SCRIPT KILL 2>&1)
+    if [ "$reply" = "OK" ]; then break; fi
+    sleep 0.1
+  done
+  wait "$pid" || true
+  cat "$TMP/eval_$port.out" >> "$out"
+  echo "$reply" >> "$out"
+}
+
+# kill_dirty: $1=port $2=side-out : 写后循环脚本，KILL 收敛到 UNKILLABLE（若抢跑
+# 误杀则本轮作废重发，最多 5 轮）；EVAL 侧输出为空（脚本仍在跑），只记 KILL 回复
+kill_dirty() {
+  local port=$1 out=$2
+  echo "### KILL-DIRTY" >> "$out"
+  local reply=""
+  for _ in $(seq 1 5); do
+    redis-cli -p "$port" EVAL "redis.call('set','uk','1') while true do end return 1" 0 > "$TMP/evald_$port.out" 2>&1 &
+    local pid=$!
+    sleep 1
+    reply=$(redis-cli -p "$port" SCRIPT KILL 2>&1)
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    if [ "$reply" != "OK" ]; then break; fi
+  done
+  cat "$TMP/evald_$port.out" >> "$out"
+  echo "$reply" >> "$out"
+}
+
+kill_clean "$GEDIS_PORT" "$GEDIS_OUT"
+kill_clean "$REDIS_PORT" "$REDIS_OUT"
+# UNKILLABLE 压尾：真机侧脚本永不结束（trap 负责收尸），之后不再发任何命令
+kill_dirty "$GEDIS_PORT" "$GEDIS_OUT"
+kill_dirty "$REDIS_PORT" "$REDIS_OUT"
 
 if diff -u "$REDIS_OUT" "$GEDIS_OUT"; then
   echo "LUA COMPAT OK"

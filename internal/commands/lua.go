@@ -34,11 +34,75 @@ import (
 //     SCRIPT LOAD/EXISTS/FLUSH 语义对齐；未知子命令→
 //     `ERR unknown subcommand '<X>'. Try SCRIPT HELP.`。
 //   - 每 EVAL 一副新 LState + 5s context 超时（对齐 lua-time-limit 默认，防死循环 hang 住连接）。
-// v1 非目标：SCRIPT KILL、可调 lua-time-limit、阻塞命令限制、cjson/cmsgpack、
+//   - SCRIPT KILL：跨连接中止在飞脚本；无运行→NOTBUSY，已执行写命令→
+//     UNKILLABLE（dirty 规则经 7.2.6 探针：分发执行的写命令即脏，
+//     回复错误也算；未知命令/arity 等分发前拒绝不算脏）。
+// v1 非目标：可调 lua-time-limit、阻塞命令限制、cjson/cmsgpack、
 // 从库脚本内写拦截（直调 handler 绕过 readonly 门，注释备案）。
 type LuaRegistry struct {
 	mu      sync.Mutex
 	scripts map[string]string
+	running map[*luaRun]struct{}
+}
+
+// luaRun 是一次在飞脚本执行的 KILL 句柄。字段仅在 reg.mu 下读写：
+// EVAL 侧（PCall 阻塞中）由 registerRedisLib 闭包置 dirty，KILL 侧读 dirty
+// 后调 cancel 中断 gopher-lua 主循环（vm.go 每轮 select ctx.Done）。
+type luaRun struct {
+	cancel context.CancelFunc
+	dirty  bool
+	killed bool
+}
+
+// track 登记在飞脚本；untrack 注销（run defer）。
+func (r *LuaRegistry) track(rr *luaRun) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.running == nil {
+		r.running = make(map[*luaRun]struct{})
+	}
+	r.running[rr] = struct{}{}
+}
+
+func (r *LuaRegistry) untrack(rr *luaRun) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.running, rr)
+}
+
+// kill 中止全部在飞的干净脚本。任一已脏则整体 UNKILLABLE（真机单脚本
+// 语义的保守推广：gedis 并发执行可有多在飞，杀一半留一半更迷惑）。
+// 返回 (killed, unkillable)：无在飞时均为 false（NOTBUSY）。
+func (r *LuaRegistry) kill() (killed, unkillable bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.running) == 0 {
+		return false, false
+	}
+	for rr := range r.running {
+		if rr.dirty {
+			return false, true
+		}
+	}
+	for rr := range r.running {
+		rr.killed = true
+		rr.cancel()
+	}
+	return true, false
+}
+
+// markDirty 标记某次执行已分发过写命令（分发前拒绝的不调此函数）。
+func (r *LuaRegistry) markDirty(rr *luaRun) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rr.dirty = true
+}
+
+// wasKilled 供 run 在 PCall 出错后判定是否走 killed 文案（而非 ctx 原文）。
+func (r *LuaRegistry) wasKilled(rr *luaRun) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return rr.killed
 }
 
 // RegisterLua 注册 EVAL/EVALSHA/SCRIPT；返回 registry（纯缓存，无连接状态，无需 ConnClosed）。
@@ -181,6 +245,19 @@ func (e *luaExec) handleScript(_ context.Context, args []protocol.Value) protoco
 		e.reg.scripts = make(map[string]string)
 		e.reg.mu.Unlock()
 		return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
+	case "KILL":
+		if len(args) != 1 {
+			return errValueStr("ERR wrong number of arguments for 'script|kill' command")
+		}
+		killed, unkillable := e.reg.kill()
+		switch {
+		case unkillable:
+			return errValueStr("UNKILLABLE Sorry the script already executed write commands against the dataset. You can either wait the script termination or kill the server in a hard way using the SHUTDOWN NOSAVE command.")
+		case killed:
+			return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
+		default:
+			return errValueStr("NOTBUSY No scripts in execution right now.")
+		}
 	default:
 		return errValueStr(fmt.Sprintf("ERR unknown subcommand '%s'. Try SCRIPT HELP.", sub))
 	}
@@ -197,14 +274,20 @@ func (e *luaExec) run(ctx context.Context, body string, keys, argv []string) pro
 
 	L.SetGlobal("KEYS", strSliceTable(L, keys))
 	L.SetGlobal("ARGV", strSliceTable(L, argv))
-	e.registerRedisLib(L, ctx)
+	rr := &luaRun{cancel: cancel}
+	e.registerRedisLib(L, ctx, rr)
 
 	fn, err := L.Load(strings.NewReader(body), "user_script")
 	if err != nil {
 		return errValueStr("ERR Error compiling script (new function): " + compileDetail(body, err))
 	}
+	e.reg.track(rr)
+	defer e.reg.untrack(rr)
 	L.Push(fn)
 	if err := L.PCall(0, 1, nil); err != nil {
+		if e.reg.wasKilled(rr) {
+			return errValueStr("ERR Script killed by user with SCRIPT KILL... script: " + sha + ", on @user_script:1.")
+		}
 		msg, _, _ := strings.Cut(err.Error(), "\n")
 		return scriptError(msg, sha)
 	}
@@ -256,11 +339,11 @@ func strSliceTable(L *lua.LState, ss []string) *lua.LTable {
 	return t
 }
 
-func (e *luaExec) registerRedisLib(L *lua.LState, ctx context.Context) {
+func (e *luaExec) registerRedisLib(L *lua.LState, ctx context.Context, rr *luaRun) {
 	lib := L.NewTable()
 	L.SetFuncs(lib, map[string]lua.LGFunction{
-		"call":         e.luaCall(ctx, false),
-		"pcall":        e.luaCall(ctx, true),
+		"call":         e.luaCall(ctx, false, rr),
+		"pcall":        e.luaCall(ctx, true, rr),
 		"sha1hex":      luaSha1hex,
 		"log":          luaLog,
 		"error_reply":  luaErrorReply,
@@ -303,8 +386,12 @@ func luaStatusReply(L *lua.LState) int {
 	return 1
 }
 
+// luaWriteCmds 复用写命令集合做 KILL 脏标记（包级单例，WriteCommandSet 每次新建 map）。
+var luaWriteCmds = WriteCommandSet()
+
 // luaCall 实现 redis.call/pcall：直调 Router.Handler，错误在 call 下 raise、pcall 下装 {err} 表。
-func (e *luaExec) luaCall(ctx context.Context, pcall bool) lua.LGFunction {
+// 写命令实际分发即标脏（回复错误也算；未知命令/arity 等分发前拒绝的不脏）。
+func (e *luaExec) luaCall(ctx context.Context, pcall bool, rr *luaRun) lua.LGFunction {
 	return func(L *lua.LState) int {
 		top := L.GetTop()
 		nameV := L.Get(1)
@@ -316,6 +403,7 @@ func (e *luaExec) luaCall(ctx context.Context, pcall bool) lua.LGFunction {
 		if !ok {
 			return e.raiseOrTable(L, pcall, "ERR Unknown Redis command called from script")
 		}
+		upName := strings.ToUpper(string(nameStr))
 		elems := make([]protocol.Value, 0, top)
 		for i := 2; i <= top; i++ {
 			switch v := L.Get(i).(type) {
@@ -327,10 +415,13 @@ func (e *luaExec) luaCall(ctx context.Context, pcall bool) lua.LGFunction {
 				return e.raiseOrTable(L, pcall, "ERR Lua redis() argument must be a string or number")
 			}
 		}
-		if arity, known := CommandArity()[strings.ToUpper(string(nameStr))]; known {
+		if arity, known := CommandArity()[upName]; known {
 			if !checkArity(arity, len(elems)+1) {
 				return e.raiseOrTable(L, pcall, "ERR Wrong number of args calling Redis command from script")
 			}
+		}
+		if luaWriteCmds[upName] {
+			e.reg.markDirty(rr)
 		}
 		reply := h(ctx, elems)
 		if reply.Kind == protocol.KindError && !pcall {

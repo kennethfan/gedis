@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
@@ -183,4 +184,75 @@ func Test_Lua_when_EvalInMulti(t *testing.T) {
 	require.Len(t, got.Elems, 1)
 	require.Equal(t, protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}, got.Elems[0])
 	require.Equal(t, protocol.BulkOf("1"), dispatchLua(r, c, "EVAL", "return redis.call('GET','mk')", "0"))
+}
+
+// WM: 无在飞脚本时 SCRIPT KILL 回 NOTBUSY；arity 按真机 script|kill 文案
+func Test_Lua_when_ScriptKillNotBusy(t *testing.T) {
+	r, c := openLuaSetup(t)
+	require.Equal(t, protocol.Value{Kind: protocol.KindError,
+		S: "NOTBUSY No scripts in execution right now."},
+		dispatchLua(r, c, "SCRIPT", "KILL"))
+	require.Equal(t, protocol.Value{Kind: protocol.KindError,
+		S: "ERR wrong number of arguments for 'script|kill' command"},
+		dispatchLua(r, c, "SCRIPT", "KILL", "extra"))
+}
+
+// WM: 跨连接 KILL 死循环脚本；EVAL 侧收 killed 文案，连接可继续用
+func Test_Lua_when_ScriptKillLoop(t *testing.T) {
+	r, c := openLuaSetup(t)
+	srv2, _ := net.Pipe()
+	t.Cleanup(func() { _ = srv2.Close() })
+
+	script := "while true do end return 1"
+	sha := sha1Hex(script)
+	done := make(chan protocol.Value, 1)
+	go func() {
+		done <- dispatchLua(r, c, "EVAL", script, "0")
+	}()
+
+	var killReply protocol.Value
+	for i := 0; i < 500; i++ {
+		killReply = dispatchLua(r, srv2, "SCRIPT", "KILL")
+		if killReply.Kind == protocol.KindSimpleString {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.Equal(t, protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}, killReply)
+
+	select {
+	case got := <-done:
+		require.Equal(t, protocol.Value{Kind: protocol.KindError,
+			S: "ERR Script killed by user with SCRIPT KILL... script: " + sha + ", on @user_script:1."}, got)
+	case <-time.After(10 * time.Second):
+		t.Fatal("killed EVAL did not return")
+	}
+	require.Equal(t, protocol.Value{Kind: protocol.KindError,
+		S: "NOTBUSY No scripts in execution right now."},
+		dispatchLua(r, srv2, "SCRIPT", "KILL"))
+	require.Equal(t, intVal(1), dispatchLua(r, c, "EVAL", "return 1", "0"))
+}
+
+// WM: 执行过写命令的脚本不可杀（UNKILLABLE）；错误回复的写也算脏
+func Test_Lua_when_ScriptKillAfterWrite(t *testing.T) {
+	r, c := openLuaSetup(t)
+	srv2, _ := net.Pipe()
+	t.Cleanup(func() { _ = srv2.Close() })
+
+	done := make(chan protocol.Value, 1)
+	go func() {
+		done <- dispatchLua(r, c, "EVAL", "redis.call('set','kk','1') while true do end return 1", "0")
+	}()
+	time.Sleep(time.Second)
+	require.Equal(t, protocol.Value{Kind: protocol.KindError, S: "UNKILLABLE Sorry the script already executed write commands against the dataset. You can either wait the script termination or kill the server in a hard way using the SHUTDOWN NOSAVE command."},
+		dispatchLua(r, srv2, "SCRIPT", "KILL"))
+	require.Equal(t, protocol.BulkOf("1"), dispatchLua(r, srv2, "EVAL", "return redis.call('GET','kk')", "0"))
+
+	select {
+	case got := <-done:
+		require.Equal(t, protocol.KindError, got.Kind)
+		require.Contains(t, got.S, "context deadline exceeded")
+	case <-time.After(10 * time.Second):
+		t.Fatal("unkillable EVAL did not hit timeout backstop")
+	}
 }
