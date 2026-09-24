@@ -93,7 +93,11 @@ func run() error {
 	commands.RegisterWriteCommands(router)
 	txnReg := commands.RegisterTxn(router, hub)
 	pubsubReg := commands.RegisterPubSub(router)
-	commands.RegisterLua(router)
+	luaTimeout, err := cfg.Lua.EffectiveTimeLimit()
+	if err != nil {
+		return fmt.Errorf("invalid lua.time_limit: %w", err)
+	}
+	commands.RegisterLua(router, luaTimeout)
 	srv.OnConnClose(func(c net.Conn) {
 		txnReg.ConnClosed(c)
 		pubsubReg.ConnClosed(c)

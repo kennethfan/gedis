@@ -3,7 +3,9 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -19,6 +21,7 @@ type Config struct {
 	Memory      Memory      `toml:"memory"`
 	Persistence Persistence `toml:"persistence"`
 	Metrics     Metrics     `toml:"metrics"`
+	Lua         Lua         `toml:"lua"`
 }
 
 // Server holds listener settings.
@@ -49,6 +52,34 @@ type Persistence struct {
 type Metrics struct {
 	Enabled bool `toml:"enabled"`
 	Port    int  `toml:"port"`
+}
+
+// DefaultLuaTimeLimitMs mirrors Redis' lua-time-limit default (5000ms).
+const DefaultLuaTimeLimitMs = 5000
+
+// Lua holds scripting settings.
+type Lua struct {
+	// TimeLimitMs caps a single script run in milliseconds.
+	// Nil (section/key absent) means the default; explicit 0 disables
+	// the limit (mirrors Redis, where 0 disables lua-time-limit).
+	TimeLimitMs *int64 `toml:"time_limit"`
+}
+
+// EffectiveTimeLimit resolves the configured limit: default when absent,
+// 0 (unlimited) when explicitly 0. Negative or overflowing values error.
+func (l Lua) EffectiveTimeLimit() (time.Duration, error) {
+	ms := int64(DefaultLuaTimeLimitMs)
+	if l.TimeLimitMs != nil {
+		ms = *l.TimeLimitMs
+	}
+	if ms < 0 {
+		return 0, fmt.Errorf("lua.time_limit must be between 0 and %d inclusive, got %d",
+			int64(math.MaxInt64)/int64(time.Millisecond), ms)
+	}
+	if ms > math.MaxInt64/int64(time.Millisecond) {
+		return 0, fmt.Errorf("lua.time_limit %d overflows time.Duration", ms)
+	}
+	return time.Duration(ms) * time.Millisecond, nil
 }
 
 // Load parses the TOML file at path into a Config.

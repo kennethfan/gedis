@@ -106,9 +106,10 @@ func (r *LuaRegistry) wasKilled(rr *luaRun) bool {
 }
 
 // RegisterLua 注册 EVAL/EVALSHA/SCRIPT；返回 registry（纯缓存，无连接状态，无需 ConnClosed）。
-func RegisterLua(r *network.Router) *LuaRegistry {
+// timeout 为单脚本执行上限（0 表示不限，kill 仍可中断）；默认 5s 由调用方按配置传入。
+func RegisterLua(r *network.Router, timeout time.Duration) *LuaRegistry {
 	reg := &LuaRegistry{scripts: make(map[string]string)}
-	exec := &luaExec{router: r, reg: reg}
+	exec := &luaExec{router: r, reg: reg, timeout: timeout}
 	r.Register("EVAL", exec.handleEval)
 	r.Register("EVALSHA", exec.handleEvalSHA)
 	r.Register("SCRIPT", exec.handleScript)
@@ -116,8 +117,9 @@ func RegisterLua(r *network.Router) *LuaRegistry {
 }
 
 type luaExec struct {
-	router *network.Router
-	reg    *LuaRegistry
+	router  *network.Router
+	reg     *LuaRegistry
+	timeout time.Duration
 }
 
 func sha1Hex(s string) string {
@@ -268,8 +270,14 @@ func (e *luaExec) run(ctx context.Context, body string, keys, argv []string) pro
 	sha := e.cached(body)
 	L := lua.NewState()
 	defer L.Close()
-	tctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// WithCancel 为底（kill 随时可中断），限时再包一层 WithTimeout；0 表示不限。
+	tctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	if e.timeout > 0 {
+		var tc context.CancelFunc
+		tctx, tc = context.WithTimeout(tctx, e.timeout)
+		defer tc()
+	}
 	L.SetContext(tctx)
 
 	L.SetGlobal("KEYS", strSliceTable(L, keys))

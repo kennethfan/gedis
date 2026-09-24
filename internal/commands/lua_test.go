@@ -15,6 +15,11 @@ import (
 
 func openLuaSetup(t testing.TB) (*network.Router, net.Conn) {
 	t.Helper()
+	return openLuaSetupWithTimeout(t, 5*time.Second)
+}
+
+func openLuaSetupWithTimeout(t testing.TB, timeout time.Duration) (*network.Router, net.Conn) {
+	t.Helper()
 	hub := replication.NewHub(1024)
 	store := storage.NewWithOptions(t.TempDir(), storage.Options{Hub: hub})
 	require.NoError(t, store.Open())
@@ -22,7 +27,7 @@ func openLuaSetup(t testing.TB) (*network.Router, net.Conn) {
 	r := network.NewRouter()
 	RegisterStrings(r, store)
 	RegisterList(r, store, nil)
-	RegisterLua(r)
+	RegisterLua(r, timeout)
 	RegisterTxn(r, hub)
 	srv, _ := net.Pipe()
 	t.Cleanup(func() { _ = srv.Close() })
@@ -255,4 +260,20 @@ func Test_Lua_when_ScriptKillAfterWrite(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("unkillable EVAL did not hit timeout backstop")
 	}
+}
+
+// WM: 可配置超时生效（100ms 中断死循环）
+func Test_Lua_when_CustomTimeout(t *testing.T) {
+	r, c := openLuaSetupWithTimeout(t, 100*time.Millisecond)
+	start := time.Now()
+	got := dispatchLua(r, c, "EVAL", "while true do end return 1", "0")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "context deadline exceeded")
+	require.Less(t, time.Since(start), 5*time.Second)
+}
+
+// WM: 超时 0 表示不限（速返脚本不受影响）
+func Test_Lua_when_ZeroTimeoutUnlimited(t *testing.T) {
+	r, c := openLuaSetupWithTimeout(t, 0)
+	require.Equal(t, intVal(1), dispatchLua(r, c, "EVAL", "return 1", "0"))
 }
