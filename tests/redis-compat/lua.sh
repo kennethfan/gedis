@@ -231,6 +231,82 @@ run_both EVAL "rawset(_G,'x',1)" 0
 run_both EVAL "local _, e = pcall(rawset, _G, 'x', 1) return e" 0
 run_both EVAL "KEYS[1]='x' return KEYS[1]" 1 k
 
+# M6-F6 三库：bit/cmsgpack/struct 语义与只读（#34；同体 EVAL → 同 sha 可比）
+run_both EVAL "return bit.tobit(10)" 0
+run_both EVAL "return bit.tohex(255)" 0
+run_both EVAL "return bit.tohex(255,-8)" 0
+run_both EVAL "return bit.bor(1,2,4)" 0
+run_both EVAL "return bit.band(7,3)" 0
+run_both EVAL "return bit.bxor(5,3)" 0
+run_both EVAL "return bit.bnot(0)" 0
+run_both EVAL "return bit.lshift(1,31)" 0
+run_both EVAL "return bit.rshift(256,4)" 0
+run_both EVAL "return bit.arshift(-16,2)" 0
+run_both EVAL "return bit.rol(2147483648,1)" 0
+run_both EVAL "return bit.ror(1,1)" 0
+run_both EVAL "local ok,err=pcall(bit.bor); return err" 0
+run_both EVAL "bit.bor = 1 return 1" 0
+run_both EVAL "return cmsgpack.unpack(cmsgpack.pack(42))" 0
+run_both EVAL "return cmsgpack.unpack(cmsgpack.pack('hi'))" 0
+run_both EVAL "return cmsgpack.unpack(cmsgpack.pack({1,2,3}))[3]" 0
+run_both EVAL "return cmsgpack.unpack(cmsgpack.pack({name='bob'})).name" 0
+run_both EVAL "return cmsgpack.unpack(cmsgpack.pack(true))" 0
+run_both EVAL "return cmsgpack.unpack(cmsgpack.pack(nil)) == nil" 0
+run_both EVAL "return {cmsgpack.unpack_one(cmsgpack.pack(7))}" 0
+run_both EVAL "return {cmsgpack.unpack_limit(cmsgpack.pack(9),9)}" 0
+run_both EVAL "return cmsgpack.unpack('') == nil" 0
+run_both EVAL "local ok,err=pcall(cmsgpack.pack); return err" 0
+run_both EVAL "local ok,err=pcall(cmsgpack.unpack); return err" 0
+run_both EVAL "return cmsgpack._VERSION" 0
+run_both EVAL "cmsgpack.pack = 1 return 1" 0
+run_both EVAL "return #(struct.pack('>I4',43981))" 0
+run_both EVAL "return {struct.unpack('>I4',struct.pack('>I4',43981))}" 0
+run_both EVAL "return {struct.unpack('<i',struct.pack('<i',-5))}" 0
+run_both EVAL "return struct.size('>I4')" 0
+run_both EVAL "return struct.pack('>H',1) ~= struct.pack('<H',1)" 0
+run_both EVAL "return {struct.unpack('c3','abcdef')}" 0
+run_both EVAL "return {struct.unpack('!4>I4I4',struct.pack('!4>I4I4',1,2))}" 0
+run_both EVAL "return {struct.unpack('s',struct.pack('s','hi'))}" 0
+run_both EVAL "local ok,err=pcall(struct.pack,'z',1); return err" 0
+run_both EVAL "local ok,err=pcall(struct.unpack,'I4','ab'); return err" 0
+run_both EVAL "struct.pack = 1 return 1" 0
+# M6-F6b pcall 双形态（A式直调'?'无前缀 / B'式闭包有位真名，#34 liberr）
+run_both EVAL "local _,e=pcall(bit.tobit); return e" 0
+run_both EVAL "local _,e=pcall(bit.lshift,1); return e" 0
+run_both EVAL "local _,e=pcall(function() return bit.tobit() end); return e" 0
+run_both EVAL "return bit.tobit()" 0
+run_both EVAL "local _,e=pcall(struct.pack); return e" 0
+run_both EVAL "local _,e=pcall(struct.unpack,'>s','hi'); return e" 0
+run_both EVAL "local _,e=pcall(struct.pack,'!0I',1); return e" 0
+run_both EVAL "local _,e=pcall(function() return struct.pack('>X',1) end); return e" 0
+run_both EVAL "return struct.unpack('>s','hi')" 0
+# M6-F6c cmsgpack 0.4.0 语义（未知类型→nil / 16层截断 / 多值 / limit计值 / 参数折叠）
+run_both EVAL "return #cmsgpack.pack(pcall)" 0
+run_both EVAL "return cmsgpack.unpack(cmsgpack.pack(pcall)) == nil" 0
+run_both EVAL "local a,b=cmsgpack.unpack(cmsgpack.pack(1)..cmsgpack.pack(2)); return a+b" 0
+run_both EVAL "local o,v=cmsgpack.unpack_limit(cmsgpack.pack(7)..cmsgpack.pack(8),10,1); return {o,v}" 0
+run_both EVAL "local o,v=cmsgpack.unpack_one(cmsgpack.pack(7),0,5); return v" 0
+run_both EVAL "return cmsgpack.unpack(123)" 0
+run_both EVAL "local o,v=cmsgpack.unpack_one(cmsgpack.pack(7)..cmsgpack.pack(8),'1'); return {o,v}" 0
+run_both EVAL "return cmsgpack.unpack('') == nil" 0
+run_both EVAL "return #(cmsgpack.pack(2^63))" 0
+run_both EVAL "return #(cmsgpack.pack(-2^63-1))" 0
+run_both EVAL "return cmsgpack.unpack(cmsgpack.pack(2^70))==2^70" 0
+run_both EVAL "local o,a,b=cmsgpack.unpack_limit(cmsgpack.pack(1)..cmsgpack.pack(2)..cmsgpack.pack(3),2,0); return {o,a,b}" 0
+run_both EVAL "local t={}; for i=1,20 do t={t} end; local u=cmsgpack.unpack(cmsgpack.pack(t)); local d=0; while type(u)=='table' do u=u[1]; d=d+1 end; return d" 0
+run_both EVAL "local o,v=cmsgpack.unpack_limit(cmsgpack.pack({{{{{1}}}}}),2,0); return v[1][1][1][1][1]" 0
+run_both EVAL "return cmsgpack.unpack_one(cmsgpack.pack(7), 9)" 0
+run_both EVAL "return cmsgpack.unpack_one(cmsgpack.pack(7), -1)" 0
+run_both EVAL "return cmsgpack.unpack(string.sub(cmsgpack.pack(1000),1,2))" 0
+run_both EVAL "return cmsgpack.unpack(string.char(0xc1))" 0
+run_both EVAL "return cmsgpack.unpack(string.char(0xd4,0x01,0x02))" 0
+run_both EVAL "local o=cmsgpack.unpack_limit(cmsgpack.pack(7),0,0); return o" 0
+run_both EVAL "return cmsgpack.unpack_limit(cmsgpack.pack(1000)..cmsgpack.pack(2),0,1)" 0
+run_both EVAL "return cmsgpack.unpack_limit(cmsgpack.pack(1)..cmsgpack.pack(2)..cmsgpack.pack(3),0,2)" 0
+run_both EVAL "local t=cmsgpack.unpack(cmsgpack.pack({1,2,x=3})); return {t[1],t[2],t.x,#t}" 0
+run_both EVAL "local o,v=cmsgpack.unpack_one(cmsgpack.pack(7),1); return {o,v}" 0
+run_both EVAL "local _,e=pcall(cmsgpack.unpack_one,cmsgpack.pack(7),-1); return e" 0
+
 # kill_clean: $1=port $2=side-out : 后台 EVAL 死循环，重试 KILL 直到 OK（收敛掉
 # EVAL 注册前的 NOTBUSY 空窗），只记录终态 KILL 回复 + EVAL 侧输出
 kill_clean() {

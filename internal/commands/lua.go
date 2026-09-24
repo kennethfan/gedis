@@ -299,6 +299,9 @@ func (e *luaExec) run(ctx context.Context, body string, keys, argv []string) pro
 	rr := &luaRun{cancel: cancel}
 	e.registerRedisLib(L, ctx, rr)
 	registerCjsonLib(L, e.reg.cjsonCfg())
+	registerBitLib(L)
+	registerCmsgpackLib(L)
+	registerStructLib(L)
 	hardenSandbox(L)
 
 	fn, err := L.Load(strings.NewReader(body), "user_script")
@@ -503,7 +506,7 @@ var sandboxStripGlobals = []string{
 
 // sandboxReadonlyLibs 为真机只读的子库表：写即 `Attempt to modify a readonly table`（带位置）。
 var sandboxReadonlyLibs = []string{
-	"string", "table", "math", "coroutine", "redis", "cjson",
+	"string", "table", "math", "coroutine", "redis", "cjson", "bit", "cmsgpack", "struct",
 }
 
 func sandboxReadonly(L *lua.LState) int {
