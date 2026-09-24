@@ -91,7 +91,7 @@ func run() error {
 	commands.RegisterMonitor(router, store, stats, hub)
 	commands.RegisterReplication(router, store, stats, hub)
 	commands.RegisterWriteCommands(router)
-	txnReg := commands.RegisterTxn(router)
+	txnReg := commands.RegisterTxn(router, hub)
 	srv.OnConnClose(txnReg.ConnClosed)
 	exp := commands.NewExpirer(store, stats)
 	exp.Start()

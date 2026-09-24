@@ -7,6 +7,8 @@ import (
 
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
+	"github.com/kennethfan/gedis/internal/replication"
+	"github.com/kennethfan/gedis/internal/storage"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,9 +19,14 @@ func dispatchTxn(r *network.Router, conn net.Conn, args ...string) protocol.Valu
 
 func openTxnSetup(t testing.TB) (*network.Router, *TxnRegistry, net.Conn, net.Conn) {
 	t.Helper()
-	r, store := openTestSetup(t)
+	hub := replication.NewHub(1024)
+	store := storage.NewWithOptions(t.TempDir(), storage.Options{Hub: hub})
+	require.NoError(t, store.Open())
+	t.Cleanup(func() { _ = store.Close() })
+	r := network.NewRouter()
+	RegisterStrings(r, store)
 	RegisterList(r, store, nil)
-	reg := RegisterTxn(r)
+	reg := RegisterTxn(r, hub)
 	ca, _ := net.Pipe()
 	cb, _ := net.Pipe()
 	t.Cleanup(func() { ca.Close(); cb.Close() })
@@ -184,4 +191,115 @@ func Test_Txn_when_ConnClosedDiscardsSession(t *testing.T) {
 	reg.ConnClosed(ca)
 	require.Contains(t, dispatchTxn(r, ca, "EXEC").S, "EXEC without MULTI")
 	require.Nil(t, dispatch(r, "GET", "k").Bulk)
+}
+
+// Given: WATCH k 后无人碰 k
+// When: MULTI → SET → EXEC
+// Then: 正常提交，返回单元素数组
+func Test_Watch_when_NoTouchExecutes(t *testing.T) {
+	r, _, ca, _ := openTxnSetup(t)
+	require.Equal(t, "OK", dispatchTxn(r, ca, "WATCH", "k").S)
+	dispatchTxn(r, ca, "MULTI")
+	dispatchTxn(r, ca, "SET", "k", "v")
+	got := dispatchTxn(r, ca, "EXEC")
+	require.Equal(t, protocol.KindArray, got.Kind)
+	require.Len(t, got.Elems, 1)
+	require.Equal(t, protocol.BulkOf("v"), dispatch(r, "GET", "k"))
+}
+
+// Given: WATCH k/lst 后另一连接改了 k 与 lst（string 走 s: 前缀，list 走 l: 前缀）
+// When: MULTI → SET → EXEC
+// Then: 回 NullArray（*-1），事务未执行
+func Test_Watch_when_CrossConnTouchAborts(t *testing.T) {
+	r, _, ca, _ := openTxnSetup(t)
+	require.Equal(t, "OK", dispatchTxn(r, ca, "WATCH", "k", "lst").S)
+	dispatch(r, "SET", "k", "other")
+	dispatch(r, "RPUSH", "lst", "x")
+	dispatchTxn(r, ca, "MULTI")
+	dispatchTxn(r, ca, "SET", "k", "mine")
+	got := dispatchTxn(r, ca, "EXEC")
+	require.Equal(t, protocol.KindArray, got.Kind)
+	require.Nil(t, got.Elems)
+	require.Equal(t, protocol.BulkOf("other"), dispatch(r, "GET", "k"))
+}
+
+// Given: WATCH 后被改，但中途 UNWATCH
+// When: MULTI → SET → EXEC
+// Then: 正常提交
+func Test_Watch_when_UnwatchClears(t *testing.T) {
+	r, _, ca, _ := openTxnSetup(t)
+	dispatchTxn(r, ca, "WATCH", "k")
+	dispatch(r, "SET", "k", "other")
+	require.Equal(t, "OK", dispatchTxn(r, ca, "UNWATCH").S)
+	dispatchTxn(r, ca, "MULTI")
+	dispatchTxn(r, ca, "SET", "k", "mine")
+	got := dispatchTxn(r, ca, "EXEC")
+	require.Len(t, got.Elems, 1)
+	require.Equal(t, protocol.BulkOf("mine"), dispatch(r, "GET", "k"))
+}
+
+// Given: MULTI 内 WATCH
+// When: 报错后继续排队 → EXEC
+// Then: WATCH 被拒但事务不污染，正常提交
+func Test_Watch_when_InsideMultiRejectedWithoutDirty(t *testing.T) {
+	r, _, ca, _ := openTxnSetup(t)
+	dispatchTxn(r, ca, "MULTI")
+	got := dispatchTxn(r, ca, "WATCH", "k")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Equal(t, "ERR WATCH inside MULTI is not allowed", got.S)
+	dispatchTxn(r, ca, "SET", "a", "b")
+	got = dispatchTxn(r, ca, "EXEC")
+	require.Len(t, got.Elems, 1)
+	require.Equal(t, "OK", got.Elems[0].S)
+}
+
+// Given: WATCH 后 DISCARD（清 watch）再重开事务
+// When: 第二次 MULTI → SET → EXEC
+// Then: 第一次改动不再导致中止，正常提交
+func Test_Watch_when_DiscardClears(t *testing.T) {
+	r, _, ca, _ := openTxnSetup(t)
+	dispatchTxn(r, ca, "WATCH", "k")
+	dispatch(r, "SET", "k", "other")
+	dispatchTxn(r, ca, "MULTI")
+	dispatchTxn(r, ca, "SET", "k", "x")
+	require.Equal(t, "OK", dispatchTxn(r, ca, "DISCARD").S)
+	dispatchTxn(r, ca, "MULTI")
+	dispatchTxn(r, ca, "SET", "k", "mine")
+	got := dispatchTxn(r, ca, "EXEC")
+	require.Len(t, got.Elems, 1)
+	require.Equal(t, protocol.BulkOf("mine"), dispatch(r, "GET", "k"))
+}
+
+// Given: WATCH 后裸 EXEC 失败（无 MULTI）
+// When: 他人改 k 后再 MULTI → EXEC
+// Then: watch 保留，中止回 NullArray
+func Test_Watch_when_FailedExecKeepsWatch(t *testing.T) {
+	r, _, ca, _ := openTxnSetup(t)
+	dispatchTxn(r, ca, "WATCH", "k")
+	require.Contains(t, dispatchTxn(r, ca, "EXEC").S, "EXEC without MULTI")
+	dispatch(r, "SET", "k", "other")
+	dispatchTxn(r, ca, "MULTI")
+	got := dispatchTxn(r, ca, "EXEC")
+	require.Equal(t, protocol.KindArray, got.Kind)
+	require.Nil(t, got.Elems)
+}
+
+// Given: 从未 WATCH
+// When: UNWATCH
+// Then: +OK
+func Test_Watch_when_BareUnwatch(t *testing.T) {
+	r, _, ca, _ := openTxnSetup(t)
+	require.Equal(t, "OK", dispatchTxn(r, ca, "UNWATCH").S)
+}
+
+// Given: WATCH 无参 / UNWATCH 带参
+// Then: arity 文案与真 Redis 一致（小写命令名）
+func Test_Watch_when_ArityChecked(t *testing.T) {
+	r, _, ca, _ := openTxnSetup(t)
+	got := dispatchTxn(r, ca, "WATCH")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Equal(t, "ERR wrong number of arguments for 'watch' command", got.S)
+	got = dispatchTxn(r, ca, "UNWATCH", "x")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Equal(t, "ERR wrong number of arguments for 'unwatch' command", got.S)
 }

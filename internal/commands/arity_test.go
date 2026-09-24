@@ -26,7 +26,7 @@ func Test_CommandArityCoversRouter(t *testing.T) {
 	RegisterMonitor(r, store, stats, hub)
 	RegisterReplication(r, store, stats, hub)
 	RegisterWriteCommands(r)
-	RegisterTxn(r)
+	RegisterTxn(r, hub)
 	table := CommandArity()
 	for _, name := range r.Commands() {
 		_, ok := table[name]

@@ -123,6 +123,8 @@ func CommandArity() map[string]int {
 		"TTL":                  2,
 		"TYPE":                 2,
 		"UNLINK":               -2,
+		"UNWATCH":              1,
+		"WATCH":                -2,
 		"XACK":                 -4,
 		"XADD":                 -5,
 		"XAUTOCLAIM":           -6,
