@@ -93,6 +93,7 @@ func run() error {
 	commands.RegisterWriteCommands(router)
 	txnReg := commands.RegisterTxn(router, hub)
 	pubsubReg := commands.RegisterPubSub(router)
+	commands.RegisterLua(router)
 	srv.OnConnClose(func(c net.Conn) {
 		txnReg.ConnClosed(c)
 		pubsubReg.ConnClosed(c)
