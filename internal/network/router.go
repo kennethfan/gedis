@@ -79,6 +79,17 @@ func (r *Router) Has(name string) bool {
 	return ok
 }
 
+// Commands 列出全部已注册命令名（大写）。
+func (r *Router) Commands() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]string, 0, len(r.handlers))
+	for name := range r.handlers {
+		out = append(out, name)
+	}
+	return out
+}
+
 // Dispatch 解析命令名并调用对应 handler；未知命令或畸形输入返回 Error。
 func (r *Router) Dispatch(ctx context.Context, cmd protocol.Value) protocol.Value {
 	if cmd.Kind != protocol.KindArray || len(cmd.Elems) == 0 {

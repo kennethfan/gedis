@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -11,9 +12,8 @@ import (
 )
 
 // TxnRegistry 按连接维护 MULTI 会话：排队、EXEC 回放、断开清理。
-// 排队期只做存在性检查（未知命令立即报错并污染会话，EXEC 时 EXECABORT）；
-// 参数个数等错误在回放期由各 handler 报出，落进结果数组对应位置。
-// 以上是与 Redis 的已知差异：Redis 在排队期做 arity 检查。
+// 排队期做存在性与参数个数检查（错了立即报错并污染会话，EXEC 时 EXECABORT）；
+// 类型等错误在回放期由各 handler 报出，落进结果数组对应位置。
 type TxnRegistry struct {
 	mu       sync.Mutex
 	sessions map[net.Conn]*txnSession
@@ -74,6 +74,10 @@ func (reg *TxnRegistry) intercept(ctx context.Context, cmd protocol.Value) (prot
 	if !reg.router.Has(name) {
 		sess.dirty = true
 		return network.UnknownCommandReply(cmd), true
+	}
+	if !checkArity(commandArity[name], len(cmd.Elems)) {
+		sess.dirty = true
+		return errValueStr(fmt.Sprintf("ERR wrong number of arguments for '%s' command", strings.ToLower(name))), true
 	}
 	sess.queue = append(sess.queue, cmd)
 	return protocol.Value{Kind: protocol.KindSimpleString, S: "QUEUED"}, true

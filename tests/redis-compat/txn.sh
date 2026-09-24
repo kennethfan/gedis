@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 # MULTI/EXEC/DISCARD 与真 Redis 的输出对照：同一命令序列分别发往 gedis 与 redis-server，逐行 diff。
 # 事务需要单连接：每个序列经一次 stdin 管道发给 redis-cli，保证 MULTI 会话存活。
-# 已知且被接受的差异：排队期不做 arity 检查（未知命令仍在排队期报错+EXECABORT），
-# 参数个数错误在 EXEC 回放期落进结果数组；Redis 在排队期即报错。见 Issue #21 后续项。
 set -euo pipefail
 
 GEDIS_PORT=6397
@@ -101,6 +99,11 @@ run_both LRANGE tl 0 -1
 run_both SMEMBERS tm
 run_both ZRANGE tz 0 -1
 run_both GET tc
+
+# 排队期 arity 检查：错了立即报错并污染，EXEC → EXECABORT
+txn_seq "arity" "MULTI\nSET onlykey\nGET a b\nMSET ak av\nEXEC\n"
+run_both GET onlykey
+run_both GET ak
 
 # 连接断开丢弃未提交队列：管道关闭即断开，两侧 GET 都应为 nil
 printf 'MULTI\nSET tdisc v\n' | redis-cli -p "$GEDIS_PORT" >/dev/null 2>&1 || true

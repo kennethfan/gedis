@@ -115,6 +115,47 @@ func Test_Txn_when_SessionsIsolatedByConn(t *testing.T) {
 	require.Equal(t, protocol.BulkOf("queued"), dispatch(r, "GET", "k"))
 }
 
+// Given: MULTI 后排队参数个数错误的命令
+// When: 排队期直接报错并污染会话，EXEC → EXECABORT
+// Then: 队列未执行
+func Test_Txn_when_ArityErrorAtQueueTime(t *testing.T) {
+	r, _, ca, _ := openTxnSetup(t)
+	dispatchTxn(r, ca, "MULTI")
+	got := dispatchTxn(r, ca, "SET", "onlykey")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "wrong number of arguments for 'set' command")
+	got = dispatchTxn(r, ca, "EXEC")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "EXECABORT")
+	require.Nil(t, dispatch(r, "GET", "onlykey").Bulk)
+}
+
+// Given: MULTI 后排队精确个数违规的命令（GET 带 2 参数）
+// When: 排队期报错；DISCARD 后会话干净
+// Then: 后续命令不受影响
+func Test_Txn_when_ExactArityViolated(t *testing.T) {
+	r, _, ca, _ := openTxnSetup(t)
+	dispatchTxn(r, ca, "MULTI")
+	got := dispatchTxn(r, ca, "GET", "a", "b")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "wrong number of arguments for 'get' command")
+	require.Equal(t, "OK", dispatchTxn(r, ca, "DISCARD").S)
+	require.Equal(t, "OK", dispatchTxn(r, ca, "SET", "k", "v").S)
+}
+
+// Given: MULTI 后排队满足最小个数的命令（MSET 单键值对）
+// When: EXEC
+// Then: 正常放行执行
+func Test_Txn_when_MinArityPasses(t *testing.T) {
+	r, _, ca, _ := openTxnSetup(t)
+	dispatchTxn(r, ca, "MULTI")
+	require.Equal(t, "QUEUED", dispatchTxn(r, ca, "MSET", "ak", "av").S)
+	got := dispatchTxn(r, ca, "EXEC")
+	require.Equal(t, protocol.KindArray, got.Kind)
+	require.Len(t, got.Elems, 1)
+	require.Equal(t, "OK", got.Elems[0].S)
+	require.Equal(t, protocol.BulkOf("av"), dispatch(r, "GET", "ak"))
+}
 // Given: MULTI 后排队对 string 键的 LPUSH（类型错误只能在回放期发现）
 // When: EXEC
 // Then: 错误落进结果数组对应位置，事务继续；后继命令照常执行
