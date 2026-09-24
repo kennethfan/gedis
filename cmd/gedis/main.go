@@ -92,7 +92,11 @@ func run() error {
 	commands.RegisterReplication(router, store, stats, hub)
 	commands.RegisterWriteCommands(router)
 	txnReg := commands.RegisterTxn(router, hub)
-	srv.OnConnClose(txnReg.ConnClosed)
+	pubsubReg := commands.RegisterPubSub(router)
+	srv.OnConnClose(func(c net.Conn) {
+		txnReg.ConnClosed(c)
+		pubsubReg.ConnClosed(c)
+	})
 	exp := commands.NewExpirer(store, stats)
 	exp.Start()
 

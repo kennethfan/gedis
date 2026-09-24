@@ -21,6 +21,7 @@ compat:
 		./tests/redis-compat/stream-group.sh; \
 		./tests/redis-compat/txn.sh; \
 		./tests/redis-compat/watch.sh; \
+		./tests/redis-compat/pubsub.sh; \
 	else \
 		echo "compat skipped: redis-server/redis-cli not found"; \
 	fi

@@ -44,6 +44,14 @@ func (r *Router) Register(name string, h Handler) {
 	r.handlers[strings.ToUpper(name)] = h
 }
 
+// Handler 取已注册 handler（大小写不敏感），供命令包裹复用（如订阅态 PING）。
+func (r *Router) Handler(name string) (Handler, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	h, ok := r.handlers[strings.ToUpper(name)]
+	return h, ok
+}
+
 // AttachStats 挂载统计容器，可挂载多次（以后者为准）。
 func (r *Router) AttachStats(s *Stats) {
 	r.mu.Lock()
@@ -69,6 +77,24 @@ func (r *Router) SetIntercept(fn InterceptFunc) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.intercept = fn
+}
+
+// ChainIntercept 追挂分发前钩子：与既有钩子按注册顺序依次尝试，首个
+// handled=true 者胜出。供多 registry 共存时用（如 Txn + PubSub 的订阅态拦截）。
+func (r *Router) ChainIntercept(fn InterceptFunc) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.intercept == nil {
+		r.intercept = fn
+		return
+	}
+	prev := r.intercept
+	r.intercept = func(ctx context.Context, cmd protocol.Value) (protocol.Value, bool) {
+		if reply, handled := prev(ctx, cmd); handled {
+			return reply, true
+		}
+		return fn(ctx, cmd)
+	}
 }
 
 // Has 查命令名是否已注册（大小写不敏感）。
