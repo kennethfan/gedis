@@ -8,7 +8,7 @@
 
 - **Redis 兼容** — RESP2/RESP3，可作为 drop-in 替换（`redis-cli` 直连）
 - **Pebble 存储引擎** — 纯 Go，无 CGo 依赖，WAL + 可调 fsync
-- **数据结构** — String， Hash， List， Set（含自适应编码）
+- **数据结构** — String、Hash、List、Set、Sorted Set、Geo、Bitmap、HyperLogLog、Stream（含自适应编码；Geo 复用 ZSet，Bitmap 复用 String）
 - **过期** — key 级 TTL + Hash field 过期（HEXPIRE 系），被动 + 后台主动删除
 - **主从复制** — PSYNC（全量 RDB + backlog 部分同步），只读复本
 - **内存管理** — maxmemory + allkeys-lru / volatile-lru，CONFIG 运行时调整
@@ -96,7 +96,7 @@ gedis/
 │   ├── network/          # TCP 服务 + Router + 统计/慢日志
 │   ├── protocol/         # RESP2/RESP3 编解码
 │   ├── storage/          # Pebble 存储 + WAL/fsync/批量/内存核算
-│   ├── datastruct/       # 编码（string/hash/list/set + 自适应）
+│   ├── datastruct/       # 编码（string/hash/list/set/zset/stream/hll + 自适应；geo→zset、bitmap→string）
 │   ├── commands/         # 全部命令实现
 │   ├── replication/      # Backlog/RDB/Hub/复本客户端
 │   ├── metrics/          # Prometheus exposition
@@ -119,7 +119,7 @@ make bench   # 基准测试
 
 ## Scope（v1 未实现）
 
-ZSet、Streams、Pub/Sub、Lua、MULTI/事务、Cluster、Sentinel。
+Pub/Sub、Lua、MULTI/事务、Cluster、Sentinel。
 
 ## License
 

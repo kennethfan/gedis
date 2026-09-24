@@ -8,7 +8,7 @@ A Redis-compatible storage engine in Go, backed by Pebble (pure-Go LSM-tree).
 
 - **Redis compatible** — RESP2/RESP3, drop-in replacement (`redis-cli` works directly)
 - **Pebble storage** — pure Go, no CGo, WAL + tunable fsync
-- **Data structures** — String, Hash, List, Set (with adaptive encodings)
+- **Data structures** — String, Hash, List, Set, Sorted Set, Geo, Bitmap, HyperLogLog, Stream (with adaptive encodings; Geo reuses ZSet, Bitmap reuses String)
 - **Expiration** — key-level TTL + Hash field expiration (HEXPIRE family), lazy + background active deletion
 - **Replication** — PSYNC (full RDB + backlog partial sync), read-only replicas
 - **Memory management** — maxmemory + allkeys-lru / volatile-lru, runtime CONFIG
@@ -96,7 +96,7 @@ gedis/
 │   ├── network/          # TCP server + Router + stats/slowlog
 │   ├── protocol/         # RESP2/RESP3 codec
 │   ├── storage/          # Pebble storage + WAL/fsync/batch/memory accounting
-│   ├── datastruct/       # Encodings (string/hash/list/set + adaptive)
+│   ├── datastruct/       # Encodings (string/hash/list/set/zset/stream/hll + adaptive; geo→zset, bitmap→string)
 │   ├── commands/         # All command implementations
 │   ├── replication/      # Backlog/RDB/Hub/replica client
 │   ├── metrics/          # Prometheus exposition
@@ -119,7 +119,7 @@ make bench   # Benchmarks
 
 ## Scope (not in v1)
 
-ZSet, Streams, Pub/Sub, Lua, MULTI/transactions, Cluster, Sentinel.
+Pub/Sub, Lua, MULTI/transactions, Cluster, Sentinel.
 
 ## License
 

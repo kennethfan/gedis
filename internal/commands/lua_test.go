@@ -1,0 +1,438 @@
+package commands
+
+import (
+	"context"
+	"net"
+	"testing"
+	"time"
+
+	"github.com/kennethfan/gedis/internal/network"
+	"github.com/kennethfan/gedis/internal/protocol"
+	"github.com/kennethfan/gedis/internal/replication"
+	"github.com/kennethfan/gedis/internal/storage"
+	"github.com/stretchr/testify/require"
+)
+
+func openLuaSetup(t testing.TB) (*network.Router, net.Conn) {
+	t.Helper()
+	return openLuaSetupWithTimeout(t, 5*time.Second)
+}
+
+func openLuaSetupWithTimeout(t testing.TB, timeout time.Duration) (*network.Router, net.Conn) {
+	t.Helper()
+	hub := replication.NewHub(1024)
+	store := storage.NewWithOptions(t.TempDir(), storage.Options{Hub: hub})
+	require.NoError(t, store.Open())
+	t.Cleanup(func() { _ = store.Close() })
+	r := network.NewRouter()
+	RegisterStrings(r, store)
+	RegisterList(r, store, nil)
+	RegisterStream(r, store, nil)
+	RegisterPubSub(r)
+	RegisterLua(r, timeout)
+	RegisterTxn(r, hub)
+	srv, _ := net.Pipe()
+	t.Cleanup(func() { _ = srv.Close() })
+	return r, srv
+}
+
+func dispatchLua(r *network.Router, conn net.Conn, args ...string) protocol.Value {
+	ctx := network.ContextWithConn(context.Background(), conn)
+	return r.Dispatch(ctx, cmd(args...))
+}
+
+func intVal(i int64) protocol.Value { return protocol.Value{Kind: protocol.KindInteger, I: i} }
+
+// WM: 基本返回值映射（int/string/true→1/false→nil/小数截断/嵌套拍平）
+func Test_Lua_when_ReturnMapping(t *testing.T) {
+	r, c := openLuaSetup(t)
+	require.Equal(t, intVal(1), dispatchLua(r, c, "EVAL", "return 1", "0"))
+	require.Equal(t, protocol.BulkOf("hello"), dispatchLua(r, c, "EVAL", "return 'hello'", "0"))
+	require.Equal(t, intVal(1), dispatchLua(r, c, "EVAL", "return true", "0"))
+	require.Equal(t, protocol.Value{Kind: protocol.KindBulkString},
+		dispatchLua(r, c, "EVAL", "return false", "0"))
+	require.Equal(t, intVal(3), dispatchLua(r, c, "EVAL", "return 3.5", "0"))
+	require.Equal(t,
+		protocol.ArrayOf(protocol.BulkOf("a"), protocol.BulkOf("b"), protocol.BulkOf("c")),
+		dispatchLua(r, c, "EVAL", "return {'a',{'b','c'}}", "0"))
+	require.Equal(t,
+		protocol.ArrayOf(intVal(1), intVal(2), intVal(3)),
+		dispatchLua(r, c, "EVAL", "return {1,2,3}", "0"))
+}
+
+// WM: KEYS/ARGV 按序传入
+func Test_Lua_when_KeysArgv(t *testing.T) {
+	r, c := openLuaSetup(t)
+	require.Equal(t,
+		protocol.ArrayOf(protocol.BulkOf("a"), protocol.BulkOf("b"), protocol.BulkOf("c")),
+		dispatchLua(r, c, "EVAL", "return {KEYS[1],KEYS[2],ARGV[1]}", "2", "a", "b", "c"))
+	require.Equal(t, intVal(0), dispatchLua(r, c, "EVAL", "return #KEYS", "0"))
+}
+
+// WM: redis.call 读写往返；GET 缺失回 false
+func Test_Lua_when_CallRoundtrip(t *testing.T) {
+	r, c := openLuaSetup(t)
+	require.Equal(t, protocol.Value{Kind: protocol.KindSimpleString, S: "OK"},
+		dispatchLua(r, c, "EVAL", "return redis.call('SET','k','v')", "0"))
+	require.Equal(t, protocol.BulkOf("v"),
+		dispatchLua(r, c, "EVAL", "return redis.call('GET','k')", "0"))
+	require.Equal(t, intVal(1),
+		dispatchLua(r, c, "EVAL", "return redis.call('GET','missing') == false", "0"))
+	require.Equal(t, intVal(2),
+		dispatchLua(r, c, "EVAL", "redis.call('SET','w','1'); return redis.call('INCR','w')", "0"))
+}
+
+// WM: call 错误向外抛（带 script 后缀），pcall 装 {err} 表原文返回
+func Test_Lua_when_CallVsPcallError(t *testing.T) {
+	r, c := openLuaSetup(t)
+	dispatchLua(r, c, "EVAL", "return redis.call('SET','k','v')", "0")
+	script := "return redis.call('INCR','k')"
+	sha := sha1Hex(script)
+	require.Equal(t,
+		protocol.Value{Kind: protocol.KindError,
+			S: "ERR value is not an integer or out of range script: " + sha + ", on @user_script:1."},
+		dispatchLua(r, c, "EVAL", script, "0"))
+	require.Equal(t, protocol.BulkOf("ERR value is not an integer or out of range"),
+		dispatchLua(r, c, "EVAL", "local r=redis.pcall('INCR','k'); return r.err", "0"))
+	require.Equal(t, protocol.Value{Kind: protocol.KindError, S: "ERR value is not an integer or out of range"},
+		dispatchLua(r, c, "EVAL", "local r=redis.pcall('INCR','k'); return r", "0"))
+}
+
+// WM: WRONGTYPE 不补 ERR 前缀；未知命令与 arity 由桥接层报错
+func Test_Lua_when_BridgeErrors(t *testing.T) {
+	r, c := openLuaSetup(t)
+	dispatchLua(r, c, "EVAL", "return redis.call('SET','sk','v')", "0")
+	got := dispatchLua(r, c, "EVAL", "return redis.call('LPUSH','sk','v')", "0")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "WRONGTYPE Operation against a key holding the wrong kind of value script: ")
+	require.NotContains(t, got.S, "ERR WRONGTYPE")
+	require.Equal(t, protocol.KindError,
+		dispatchLua(r, c, "EVAL", "return redis.call('NOSUCHCMD')", "0").Kind)
+	got = dispatchLua(r, c, "EVAL", "return redis.call('NOSUCHCMD')", "0")
+	require.Contains(t, got.S, "ERR Unknown Redis command called from script script: ")
+	got = dispatchLua(r, c, "EVAL", "return redis.call('GET','a','b')", "0")
+	require.Contains(t, got.S, "ERR Wrong number of args calling Redis command from script script: ")
+}
+
+// WM: {err}/{ok} 与 status_reply/error_reply 映射
+func Test_Lua_when_ErrOkTables(t *testing.T) {
+	r, c := openLuaSetup(t)
+	require.Equal(t, protocol.Value{Kind: protocol.KindError, S: "my error"},
+		dispatchLua(r, c, "EVAL", "return {err='my error'}", "0"))
+	require.Equal(t, protocol.Value{Kind: protocol.KindSimpleString, S: "fine"},
+		dispatchLua(r, c, "EVAL", "return {ok='fine'}", "0"))
+	require.Equal(t, protocol.Value{Kind: protocol.KindSimpleString, S: "fine"},
+		dispatchLua(r, c, "EVAL", "return redis.status_reply('fine')", "0"))
+	require.Equal(t, protocol.Value{Kind: protocol.KindError, S: "ERR bad"},
+		dispatchLua(r, c, "EVAL", "return redis.error_reply('bad')", "0"))
+	require.Equal(t, protocol.BulkOf("a9993e364706816aba3e25717850c26c9cd0d89d"),
+		dispatchLua(r, c, "EVAL", "return redis.sha1hex('abc')", "0"))
+}
+
+// WM: error() 与编译错误的外层格式
+func Test_Lua_when_ScriptErrors(t *testing.T) {
+	r, c := openLuaSetup(t)
+	script := "error('boom')"
+	sha := sha1Hex(script)
+	require.Equal(t,
+		protocol.Value{Kind: protocol.KindError,
+			S: "ERR user_script:1: boom script: " + sha + ", on @user_script:1."},
+		dispatchLua(r, c, "EVAL", script, "0"))
+	got := dispatchLua(r, c, "EVAL", "return {{{", "0")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "ERR Error compiling script (new function): user_script:1: ")
+}
+
+// WM: 编译错误四类映射与真机逐字对齐（7.2.6 探针），其余保留 gopher 原文
+func Test_Lua_when_CompileWording(t *testing.T) {
+	r, c := openLuaSetup(t)
+	want := func(script, detail string) protocol.Value {
+		return protocol.Value{Kind: protocol.KindError,
+			S: "ERR Error compiling script (new function): " + detail}
+	}
+	cases := []struct{ script, detail string }{
+		{"return 0x", "user_script:1: malformed number near '0x'"},
+		{"return 0xG", "user_script:1: malformed number near '0xG'"},
+		{"return 'abc", "user_script:1: unfinished string near '<eof>'"},
+		{`return "abc`, "user_script:1: unfinished string near '<eof>'"},
+		{"return 'abc\nreturn 1", "user_script:1: unfinished string near ''abc'"},
+		{"return --[[x", "user_script:1: unfinished long comment near '<eof>'"},
+		{"return --[[x\n+1", "user_script:2: unfinished long comment near '<eof>'"},
+		{"goto foo", "user_script:1: '=' expected near 'foo'"},
+	}
+	for _, tc := range cases {
+		require.Equal(t, want(tc.script, tc.detail),
+			dispatchLua(r, c, "EVAL", tc.script, "0"), "script %q", tc.script)
+	}
+	got := dispatchLua(r, c, "EVAL", "return 1+", "0")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "user_script:1: syntax error")
+}
+
+// WM: numkeys 非法三件套 + argc 不足
+func Test_Lua_when_BadNumkeys(t *testing.T) {
+	r, c := openLuaSetup(t)
+	require.Equal(t, protocol.Value{Kind: protocol.KindError,
+		S: "ERR value is not an integer or out of range"},
+		dispatchLua(r, c, "EVAL", "return 1", "foo"))
+	require.Equal(t, protocol.Value{Kind: protocol.KindError, S: "ERR Number of keys can't be negative"},
+		dispatchLua(r, c, "EVAL", "return 1", "-1"))
+	require.Equal(t, protocol.Value{Kind: protocol.KindError,
+		S: "ERR Number of keys can't be greater than number of args"},
+		dispatchLua(r, c, "EVAL", "return 1", "5", "a"))
+	require.Equal(t, protocol.Value{Kind: protocol.KindError,
+		S: "ERR wrong number of arguments for 'eval' command"},
+		dispatchLua(r, c, "EVAL", "return 1"))
+}
+
+// WM: SCRIPT LOAD→EVALSHA→EXISTS→FLUSH→NOSCRIPT；EVAL 自动缓存
+func Test_Lua_when_ScriptCache(t *testing.T) {
+	r, c := openLuaSetup(t)
+	sha := sha1Hex("return 1")
+	require.Equal(t, protocol.BulkOf(sha), dispatchLua(r, c, "SCRIPT", "LOAD", "return 1"))
+	require.Equal(t, intVal(1), dispatchLua(r, c, "EVALSHA", sha, "0"))
+	require.Equal(t, protocol.ArrayOf(intVal(1), intVal(0)),
+		dispatchLua(r, c, "SCRIPT", "EXISTS", sha, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"))
+	require.Equal(t, protocol.Value{Kind: protocol.KindSimpleString, S: "OK"},
+		dispatchLua(r, c, "SCRIPT", "FLUSH"))
+	require.Equal(t, protocol.Value{Kind: protocol.KindError,
+		S: "NOSCRIPT No matching script. Please use EVAL."},
+		dispatchLua(r, c, "EVALSHA", sha, "0"))
+	require.Equal(t, intVal(1), dispatchLua(r, c, "EVAL", "return 2-1", "0"))
+	require.Equal(t, intVal(1), dispatchLua(r, c, "EVALSHA", sha1Hex("return 2-1"), "0"))
+	require.Equal(t, protocol.Value{Kind: protocol.KindError,
+		S: "ERR unknown subcommand 'NOSUCH'. Try SCRIPT HELP."},
+		dispatchLua(r, c, "SCRIPT", "NOSUCH"))
+}
+
+// WM: MULTI 内 EVAL 整体排队，EXEC 回放执行脚本内写
+func Test_Lua_when_EvalInMulti(t *testing.T) {
+	r, c := openLuaSetup(t)
+	require.Equal(t, protocol.Value{Kind: protocol.KindSimpleString, S: "OK"},
+		dispatchLua(r, c, "MULTI"))
+	require.Equal(t, protocol.Value{Kind: protocol.KindSimpleString, S: "QUEUED"},
+		dispatchLua(r, c, "EVAL", "return redis.call('SET','mk','1')", "0"))
+	got := dispatchLua(r, c, "EXEC")
+	require.Equal(t, protocol.KindArray, got.Kind)
+	require.Len(t, got.Elems, 1)
+	require.Equal(t, protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}, got.Elems[0])
+	require.Equal(t, protocol.BulkOf("1"), dispatchLua(r, c, "EVAL", "return redis.call('GET','mk')", "0"))
+}
+
+// WM: 无在飞脚本时 SCRIPT KILL 回 NOTBUSY；arity 按真机 script|kill 文案
+func Test_Lua_when_ScriptKillNotBusy(t *testing.T) {
+	r, c := openLuaSetup(t)
+	require.Equal(t, protocol.Value{Kind: protocol.KindError,
+		S: "NOTBUSY No scripts in execution right now."},
+		dispatchLua(r, c, "SCRIPT", "KILL"))
+	require.Equal(t, protocol.Value{Kind: protocol.KindError,
+		S: "ERR wrong number of arguments for 'script|kill' command"},
+		dispatchLua(r, c, "SCRIPT", "KILL", "extra"))
+}
+
+// WM: 跨连接 KILL 死循环脚本；EVAL 侧收 killed 文案，连接可继续用
+func Test_Lua_when_ScriptKillLoop(t *testing.T) {
+	r, c := openLuaSetup(t)
+	srv2, _ := net.Pipe()
+	t.Cleanup(func() { _ = srv2.Close() })
+
+	script := "while true do end return 1"
+	sha := sha1Hex(script)
+	done := make(chan protocol.Value, 1)
+	go func() {
+		done <- dispatchLua(r, c, "EVAL", script, "0")
+	}()
+
+	var killReply protocol.Value
+	for i := 0; i < 500; i++ {
+		killReply = dispatchLua(r, srv2, "SCRIPT", "KILL")
+		if killReply.Kind == protocol.KindSimpleString {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.Equal(t, protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}, killReply)
+
+	select {
+	case got := <-done:
+		require.Equal(t, protocol.Value{Kind: protocol.KindError,
+			S: "ERR Script killed by user with SCRIPT KILL... script: " + sha + ", on @user_script:1."}, got)
+	case <-time.After(10 * time.Second):
+		t.Fatal("killed EVAL did not return")
+	}
+	require.Equal(t, protocol.Value{Kind: protocol.KindError,
+		S: "NOTBUSY No scripts in execution right now."},
+		dispatchLua(r, srv2, "SCRIPT", "KILL"))
+	require.Equal(t, intVal(1), dispatchLua(r, c, "EVAL", "return 1", "0"))
+}
+
+// WM: 执行过写命令的脚本不可杀（UNKILLABLE）；错误回复的写也算脏
+func Test_Lua_when_ScriptKillAfterWrite(t *testing.T) {
+	r, c := openLuaSetup(t)
+	srv2, _ := net.Pipe()
+	t.Cleanup(func() { _ = srv2.Close() })
+
+	done := make(chan protocol.Value, 1)
+	go func() {
+		done <- dispatchLua(r, c, "EVAL", "redis.call('set','kk','1') while true do end return 1", "0")
+	}()
+	time.Sleep(time.Second)
+	require.Equal(t, protocol.Value{Kind: protocol.KindError, S: "UNKILLABLE Sorry the script already executed write commands against the dataset. You can either wait the script termination or kill the server in a hard way using the SHUTDOWN NOSAVE command."},
+		dispatchLua(r, srv2, "SCRIPT", "KILL"))
+	require.Equal(t, protocol.BulkOf("1"), dispatchLua(r, srv2, "EVAL", "return redis.call('GET','kk')", "0"))
+
+	select {
+	case got := <-done:
+		require.Equal(t, protocol.KindError, got.Kind)
+		require.Contains(t, got.S, "context deadline exceeded")
+	case <-time.After(10 * time.Second):
+		t.Fatal("unkillable EVAL did not hit timeout backstop")
+	}
+}
+
+// WM: 脚本内禁用命令（真机 noscript 对齐）：call 直接错、pcall 装 {err}、放行命令不受影响
+func Test_Lua_when_NoScriptDenied(t *testing.T) {
+	r, c := openLuaSetup(t)
+	denied := "This Redis command is not allowed from script"
+	for _, script := range []string{
+		"return redis.call('SUBSCRIBE','ch')",
+		"return redis.call('subscribe','ch')",
+		"return redis.call('UNSUBSCRIBE','ch')",
+		"return redis.call('PSUBSCRIBE','p*')",
+		"return redis.call('PUNSUBSCRIBE','p*')",
+		"return redis.call('MONITOR')",
+		"return redis.call('MULTI')",
+		"return redis.call('EXEC')",
+		"return redis.call('DISCARD')",
+		"return redis.call('WATCH','k')",
+		"return redis.call('UNWATCH')",
+		"return redis.call('EVAL','return 1','0')",
+		"return redis.call('EVALSHA','abcdef','0')",
+		"return redis.call('SCRIPT','FLUSH')",
+		"return redis.call('QUIT')",
+	} {
+		got := dispatchLua(r, c, "EVAL", script, "0")
+		require.Equal(t, protocol.KindError, got.Kind, script)
+		require.Contains(t, got.S, denied, script)
+	}
+
+	// XREAD + BLOCK 是另一条专属文案（真机原文，scripts 复数）
+	for _, script := range []string{
+		"return redis.call('XREAD','BLOCK',0,'STREAMS','s','$')",
+		"return redis.call('XREAD','COUNT',1,'BLOCK',0,'STREAMS','s','$')",
+	} {
+		got := dispatchLua(r, c, "EVAL", script, "0")
+		require.Equal(t, protocol.KindError, got.Kind, script)
+		require.Contains(t, got.S, "XREAD command is not allowed with BLOCK option from scripts", script)
+	}
+	// arity 先于禁用检查（真机行为）：SUBSCRIBE 无参报 arity 错
+	got := dispatchLua(r, c, "EVAL", "return redis.call('SUBSCRIBE')", "0")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "Wrong number of args calling Redis command from script")
+
+	// pcall 把原文装进 {err} 表（r.err 为 bulk）
+	got = dispatchLua(r, c, "EVAL", "local r=redis.pcall('SUBSCRIBE','ch'); return r.err", "0")
+	require.Equal(t, protocol.BulkOf("ERR "+denied), got)
+
+	// 放行回归：PUBLISH/XREAD（STREAMS 后的 block 是流名）照常分发
+	require.Equal(t, intVal(0), dispatchLua(r, c, "EVAL", "return redis.call('PUBLISH','ch','hi')", "0"))
+}
+
+// WM: hasBlockOption 只认 STREAMS 之前的 BLOCK
+func Test_Lua_when_HasBlockOption(t *testing.T) {
+	bulk := func(s string) protocol.Value { return protocol.BulkOf(s) }
+	require.True(t, hasBlockOption([]protocol.Value{bulk("BLOCK"), bulk("0"), bulk("STREAMS"), bulk("s"), bulk("$")}))
+	require.True(t, hasBlockOption([]protocol.Value{bulk("block"), bulk("0"), bulk("streams"), bulk("s")}))
+	require.False(t, hasBlockOption([]protocol.Value{bulk("STREAMS"), bulk("block"), bulk("0")}))
+	require.False(t, hasBlockOption([]protocol.Value{bulk("COUNT"), bulk("1"), bulk("STREAMS"), bulk("s"), bulk("0")}))
+	require.False(t, hasBlockOption(nil))
+}
+
+// WM: 可配置超时生效（100ms 中断死循环）
+func Test_Lua_when_CustomTimeout(t *testing.T) {
+	r, c := openLuaSetupWithTimeout(t, 100*time.Millisecond)
+	start := time.Now()
+	got := dispatchLua(r, c, "EVAL", "while true do end return 1", "0")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "context deadline exceeded")
+	require.Less(t, time.Since(start), 5*time.Second)
+}
+
+// WM: 超时 0 表示不限（速返脚本不受影响）
+func Test_Lua_when_ZeroTimeoutUnlimited(t *testing.T) {
+	r, c := openLuaSetupWithTimeout(t, 0)
+	require.Equal(t, intVal(1), dispatchLua(r, c, "EVAL", "return 1", "0"))
+}
+
+// WM: 沙箱读拦截（未声明全局）+ 已声明放行
+func Test_Lua_when_SandboxRead(t *testing.T) {
+	r, c := openLuaSetup(t)
+	got := dispatchLua(r, c, "EVAL", "return foo", "0")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "Script attempted to access nonexistent global variable 'foo'")
+	require.Contains(t, got.S, "script: ")
+	got = dispatchLua(r, c, "EVAL", "return _G.qqq", "0")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "'qqq'")
+	require.Equal(t, protocol.BulkOf("1"), dispatchLua(r, c, "EVAL", "return tostring(1)", "0"))
+	require.Equal(t, intVal(1), dispatchLua(r, c, "EVAL", "return _G ~= nil", "0"))
+	require.Equal(t, intVal(1), dispatchLua(r, c, "EVAL", "return string.foo == nil", "0"))
+	require.Equal(t, intVal(1), dispatchLua(r, c, "EVAL", "return cjson ~= nil", "0"))
+}
+
+// WM: 沙箱写拦截（全局/库表/函数定义）+ KEYS/ARGV 放行
+func Test_Lua_when_SandboxWrite(t *testing.T) {
+	r, c := openLuaSetup(t)
+	for _, body := range []string{
+		"foo = 1", "tostring = 1", "redis = nil", "_G.foo = 1",
+		"function f() end", "string.foo = 1", "redis.call = 1",
+	} {
+		got := dispatchLua(r, c, "EVAL", body, "0")
+		require.Equal(t, protocol.KindError, got.Kind, body)
+		require.Contains(t, got.S, "user_script:1: Attempt to modify a readonly table", body)
+	}
+	require.Equal(t, protocol.BulkOf("x"),
+		dispatchLua(r, c, "EVAL", "KEYS[1]='x' return KEYS[1]", "1", "k"))
+	got := dispatchLua(r, c, "EVAL", "local f = function() tostring = 1 end return {pcall(f)}", "0")
+	require.Equal(t, protocol.KindArray, got.Kind)
+}
+
+// WM: raw 绕过（_G 上无位置 readonly）+ 用户表委托
+func Test_Lua_when_SandboxRaw(t *testing.T) {
+	r, c := openLuaSetup(t)
+	got := dispatchLua(r, c, "EVAL", "rawset(_G,'x',1)", "0")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "Attempt to modify a readonly table")
+	require.NotContains(t, got.S, "user_script:1:")
+	require.Contains(t, got.S, "script: ")
+	require.Equal(t, protocol.BulkOf("Attempt to modify a readonly table"),
+		dispatchLua(r, c, "EVAL", "local _, e = pcall(rawset, _G, 'x', 1) return e", "0"))
+	require.Equal(t, protocol.BulkOf("Attempt to modify a readonly table"),
+		dispatchLua(r, c, "EVAL", "local _, e = pcall(setmetatable, _G, {}) return e", "0"))
+	require.Equal(t, protocol.Value{Kind: protocol.KindBulkString},
+		dispatchLua(r, c, "EVAL", "return rawget(_G,'qqq')", "0"))
+	require.Equal(t, intVal(7), dispatchLua(r, c,
+		"EVAL", "local t = {} setmetatable(t, {__index = function() return 7 end}) return t.x", "0"))
+	require.Equal(t, intVal(0), dispatchLua(r, c, "EVAL", "return #(getmetatable(_G))", "0"))
+}
+
+// WM: 全局集合（剥离/保留）+ load 阉割
+func Test_Lua_when_SandboxGlobals(t *testing.T) {
+	r, c := openLuaSetup(t)
+	for _, name := range []string{"print", "os", "require", "io", "debug", "package"} {
+		got := dispatchLua(r, c, "EVAL", "return "+name, "0")
+		require.Equal(t, protocol.KindError, got.Kind, name)
+		require.Contains(t, got.S, "nonexistent global variable '"+name+"'", name)
+	}
+	require.Equal(t, protocol.BulkOf("Lua 5.1"), dispatchLua(r, c, "EVAL", "return _VERSION", "0"))
+	require.Equal(t, protocol.BulkOf("function"), dispatchLua(r, c, "EVAL", "return type(loadstring)", "0"))
+	require.Equal(t, protocol.BulkOf("function"), dispatchLua(r, c, "EVAL", "return type(newproxy)", "0"))
+	require.Equal(t, protocol.BulkOf("function"), dispatchLua(r, c, "EVAL", "return type(gcinfo)", "0"))
+	require.Equal(t, intVal(42), dispatchLua(r, c, "EVAL", "return loadstring('return 42')()", "0"))
+	got := dispatchLua(r, c, "EVAL", "return load('return 1')", "0")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "bad argument #1 to 'load' (function expected, got string)")
+	require.Equal(t, intVal(9), dispatchLua(r, c,
+		"EVAL", "local i = 0 local r = function() i = i + 1 if i == 1 then return 'return 9' end end return load(r)()", "0"))
+	require.Equal(t, intVal(1), dispatchLua(r, c, "EVAL", "local t = 1 return t", "0"))
+}

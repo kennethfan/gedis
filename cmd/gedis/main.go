@@ -81,9 +81,27 @@ func run() error {
 	commands.RegisterHash(router, store)
 	commands.RegisterList(router, store, stats)
 	commands.RegisterSet(router, store)
+	commands.RegisterZSet(router, store)
+	commands.RegisterGeo(router, store)
+	commands.RegisterScan(router, store)
+	commands.RegisterGeneric(router, store)
+	commands.RegisterBitmap(router, store)
+	commands.RegisterHLL(router, store)
+	commands.RegisterStream(router, store, stats)
 	commands.RegisterMonitor(router, store, stats, hub)
 	commands.RegisterReplication(router, store, stats, hub)
 	commands.RegisterWriteCommands(router)
+	txnReg := commands.RegisterTxn(router, hub)
+	pubsubReg := commands.RegisterPubSub(router)
+	luaTimeout, err := cfg.Lua.EffectiveTimeLimit()
+	if err != nil {
+		return fmt.Errorf("invalid lua.time_limit: %w", err)
+	}
+	commands.RegisterLua(router, luaTimeout)
+	srv.OnConnClose(func(c net.Conn) {
+		txnReg.ConnClosed(c)
+		pubsubReg.ConnClosed(c)
+	})
 	exp := commands.NewExpirer(store, stats)
 	exp.Start()
 

@@ -20,6 +20,8 @@ type Server struct {
 	conns  map[net.Conn]struct{}
 	closed bool
 	wg     sync.WaitGroup
+
+	onConnClose func(net.Conn)
 }
 
 func NewServer(router *Router) *Server {
@@ -31,6 +33,13 @@ func NewServer(router *Router) *Server {
 // Stats 返回服务统计容器（INFO/SLOWLOG/metrics 共用）。
 func (s *Server) Stats() *Stats {
 	return s.stats
+}
+
+// OnConnClose 注册连接关闭回调（连接清理时调用，可为 nil）。
+func (s *Server) OnConnClose(fn func(net.Conn)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onConnClose = fn
 }
 
 // Serve 在给定 listener 上 accept，listener 关闭或 Close 调用后返回。
@@ -83,7 +92,11 @@ func (s *Server) handle(conn net.Conn) {
 	defer func() {
 		s.mu.Lock()
 		delete(s.conns, conn)
+		onClose := s.onConnClose
 		s.mu.Unlock()
+		if onClose != nil {
+			onClose(conn)
+		}
 		s.stats.decConn()
 		_ = conn.Close()
 	}()
