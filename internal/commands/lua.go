@@ -39,12 +39,24 @@ import (
 //   - SCRIPT KILL：跨连接中止在飞脚本；无运行→NOTBUSY，已执行写命令→
 //     UNKILLABLE（dirty 规则经 7.2.6 探针：分发执行的写命令即脏，
 //     回复错误也算；未知命令/arity 等分发前拒绝不算脏）。
-// v1 非目标：可调 lua-time-limit、阻塞命令限制、cjson/cmsgpack、
+// v1 非目标：可调 lua-time-limit、阻塞命令限制、cmsgpack、
 // 从库脚本内写拦截（直调 handler 绕过 readonly 门，注释备案）。
 type LuaRegistry struct {
 	mu      sync.Mutex
 	scripts map[string]string
 	running map[*luaRun]struct{}
+	cjson   *cjsonSettings
+}
+
+// cjsonCfg 返回 registry 级 cjson 全局配置（跨 EVAL 持久；懒初始化，沿用
+// running-map 的 nil 守卫套路）。
+func (r *LuaRegistry) cjsonCfg() *cjsonSettings {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cjson == nil {
+		r.cjson = defaultCjsonSettings()
+	}
+	return r.cjson
 }
 
 // luaRun 是一次在飞脚本执行的 KILL 句柄。字段仅在 reg.mu 下读写：
@@ -286,7 +298,7 @@ func (e *luaExec) run(ctx context.Context, body string, keys, argv []string) pro
 	L.SetGlobal("ARGV", strSliceTable(L, argv))
 	rr := &luaRun{cancel: cancel}
 	e.registerRedisLib(L, ctx, rr)
-	registerCjsonLib(L)
+	registerCjsonLib(L, e.reg.cjsonCfg())
 	hardenSandbox(L)
 
 	fn, err := L.Load(strings.NewReader(body), "user_script")

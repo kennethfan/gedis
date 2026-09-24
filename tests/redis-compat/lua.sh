@@ -174,6 +174,24 @@ run_both EVAL "return cjson.decode('[1 2]')" 0
 run_both EVAL "return cjson.decode('{\"a\" 1}')" 0
 run_both EVAL "return cjson.decode('[1}]')" 0
 
+# cjson 配置函数：getter 默认值/setter 生效与隔离/range 错误（同体 EVAL → 同 sha 可比；
+# 配置跨 EVAL 持久，两侧状态演进一致，每段用完即重置，避免污染后续场景）
+run_both EVAL "return cjson.encode_max_depth()" 0
+run_both EVAL "return cjson.decode_max_depth()" 0
+run_both EVAL "return cjson.encode_number_precision()" 0
+run_both EVAL "return {cjson.encode_sparse_array()}" 0
+run_both EVAL "cjson.encode_max_depth(1); return cjson.encode({1})" 0
+run_both EVAL "cjson.encode_max_depth(1000); return cjson.encode_max_depth()" 0
+run_both EVAL "cjson.decode_max_depth(1); return cjson.decode('[[1]]')[1][1]" 0
+run_both EVAL "cjson.decode_max_depth(1000); return cjson.decode_max_depth()" 0
+run_both EVAL "cjson.encode_number_precision(4); return cjson.encode(1/3)" 0
+run_both EVAL "cjson.encode_number_precision(14); return cjson.encode_number_precision()" 0
+run_both EVAL "cjson.encode_sparse_array(true); return cjson.encode({[1]=1,[100]=2})" 0
+run_both EVAL "cjson.encode_sparse_array(false); return {cjson.encode_sparse_array()}" 0
+run_both EVAL "return cjson.encode_max_depth(0)" 0
+run_both EVAL "return cjson.encode_number_precision(15)" 0
+run_both EVAL "local c=cjson.new(); c.encode_max_depth(1); return cjson.encode_max_depth()" 0
+
 # SCRIPT KILL：NOTBUSY 与 arity 为确定性对照
 run_both SCRIPT KILL
 run_both SCRIPT KILL extra

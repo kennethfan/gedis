@@ -208,3 +208,103 @@ func Test_Lua_when_CjsonTokenNames(t *testing.T) {
 	require.Equal(t, intVal(2),
 		dispatchLua(r, c, "EVAL", `return cjson.decode('+2')`, "0"))
 }
+
+// WM: 配置函数默认值/getter/setter/跨 EVAL 持久/new() 隔离
+func Test_Lua_when_CjsonSettings(t *testing.T) {
+	r, c := openLuaSetup(t)
+	require.Equal(t, intVal(1000), dispatchLua(r, c, "EVAL", `return cjson.encode_max_depth()`, "0"))
+	require.Equal(t, intVal(1000), dispatchLua(r, c, "EVAL", `return cjson.decode_max_depth()`, "0"))
+	require.Equal(t, intVal(14), dispatchLua(r, c, "EVAL", `return cjson.encode_number_precision()`, "0"))
+	require.Equal(t, protocol.BulkOf("false/2/10"), dispatchLua(r, c, "EVAL",
+		`local a,b,cc=cjson.encode_sparse_array(); return tostring(a)..'/'..b..'/'..cc`, "0"))
+	require.Equal(t, intVal(1000), dispatchLua(r, c, "EVAL", `return cjson.encode_max_depth(nil)`, "0"))
+
+	// setter 回设定值，且跨 EVAL 持久（同一 Registry）。
+	require.Equal(t, intVal(7), dispatchLua(r, c, "EVAL", `return cjson.encode_max_depth(7)`, "0"))
+	require.Equal(t, intVal(7), dispatchLua(r, c, "EVAL", `return cjson.encode_max_depth()`, "0"))
+	require.Equal(t, intVal(1), dispatchLua(r, c, "EVAL", `return cjson.encode_sparse_array(true)`, "0"))
+	require.Equal(t, protocol.BulkOf("true/2/10"), dispatchLua(r, c, "EVAL",
+		`local a,b,cc=cjson.encode_sparse_array(); return tostring(a)..'/'..b..'/'..cc`, "0"))
+
+	// new() 实例恒为出厂默认（不继承全局修改）。
+	require.Equal(t, intVal(1000), dispatchLua(r, c, "EVAL", `return cjson.new().encode_max_depth()`, "0"))
+}
+
+// WM: 配置函数错误文案（与真机逐字，sha 外层组装）
+func Test_Lua_when_CjsonSettingsErrors(t *testing.T) {
+	r, c := openLuaSetup(t)
+	errMsg := func(script string) string {
+		got := dispatchLua(r, c, "EVAL", script, "0")
+		require.Equal(t, protocol.KindError, got.Kind, script)
+		return got.S
+	}
+	sha := func(script string) string { return sha1Hex(script) }
+	cases := []struct{ script, msg string }{
+		{`return cjson.encode_max_depth(0)`, "bad argument #1 to 'encode_max_depth' (expected integer between 1 and 2147483647)"},
+		{`return cjson.encode_max_depth('x')`, "bad argument #1 to 'encode_max_depth' (number expected, got string)"},
+		{`return cjson.encode_max_depth(true)`, "bad argument #1 to 'encode_max_depth' (number expected, got boolean)"},
+		{`return cjson.encode_max_depth(5,6)`, "bad argument #2 to 'encode_max_depth' (found too many arguments)"},
+		{`return cjson.encode_number_precision(15)`, "bad argument #1 to 'encode_number_precision' (expected integer between 1 and 14)"},
+		{`return cjson.encode_number_precision(0)`, "bad argument #1 to 'encode_number_precision' (expected integer between 1 and 14)"},
+		{`return cjson.encode_sparse_array('x')`, "invalid option 'x'"},
+		{`return cjson.encode_sparse_array(1)`, "invalid option '1'"},
+		{`return cjson.encode_sparse_array({})`, "bad argument #1 to 'encode_sparse_array' (string expected, got table)"},
+		{`return cjson.encode_sparse_array(true,'x')`, "bad argument #2 to 'encode_sparse_array' (number expected, got string)"},
+		{`return cjson.encode_sparse_array(true,2,-1)`, "bad argument #1 to 'encode_sparse_array' (expected integer between 0 and 2147483647)"},
+		{`return cjson.encode_sparse_array(true,2,10,4)`, "bad argument #4 to 'encode_sparse_array' (found too many arguments)"},
+	}
+	for _, tc := range cases {
+		require.Equal(t, "ERR user_script:1: "+tc.msg+" script: "+sha(tc.script)+", on @user_script:1.", errMsg(tc.script), tc.script)
+	}
+}
+
+// WM: 配置实际生效（精度/depth 稀疏门/decode 深度/sparse 开关）
+func Test_Lua_when_CjsonSettingsEffect(t *testing.T) {
+	r, c := openLuaSetup(t)
+	// 精度：默认 14，置 4 后 1/3 出 4 位。
+	require.Equal(t, protocol.BulkOf("0.33333333333333"),
+		dispatchLua(r, c, "EVAL", `return cjson.encode(1/3)`, "0"))
+	require.Equal(t, intVal(4), dispatchLua(r, c, "EVAL", `return cjson.encode_number_precision(4)`, "0"))
+	require.Equal(t, protocol.BulkOf("0.3333"),
+		dispatchLua(r, c, "EVAL", `return cjson.encode(1/3)`, "0"))
+
+	// encode 深度门：max1 下 {{}} 报 nesting(2)。
+	require.Equal(t, intVal(1), dispatchLua(r, c, "EVAL", `return cjson.encode_max_depth(1)`, "0"))
+	got := dispatchLua(r, c, "EVAL", `return cjson.encode({{}})`, "0")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "Cannot serialise, excessive nesting (2)")
+
+	// decode 深度门：decmax1 下 {"a":{}} 报 (2)@6。
+	require.Equal(t, intVal(1), dispatchLua(r, c, "EVAL", `return cjson.decode_max_depth(1)`, "0"))
+	got = dispatchLua(r, c, "EVAL", `return cjson.decode('{"a":{}}')`, "0")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "Found too many nested data structures (2) at character 6")
+}
+
+// WM: sparse 模型（拒绝/convert 回退/D 例外/ratio0 禁用）
+func Test_Lua_when_CjsonSparseModel(t *testing.T) {
+	r, c := openLuaSetup(t)
+	m100 := `{[1]=1,[100]=2}`
+	// 默认 (false,2,10)：m100 拒绝。
+	got := dispatchLua(r, c, "EVAL", `return cjson.encode(`+m100+`)`, "0")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "Cannot serialise table: excessively sparse array")
+	// convert=true：回退对象（经 decode 断言值，避开键序）。
+	require.Equal(t, intVal(1), dispatchLua(r, c, "EVAL", `return cjson.encode_sparse_array(true)`, "0"))
+	require.Equal(t, intVal(2), dispatchLua(r, c, "EVAL",
+		`return cjson.decode(cjson.encode(`+m100+`))['100']`, "0"))
+	// razor-edge：depth≤5 且 max==10 → 回退对象。
+	r2, c2 := openLuaSetup(t)
+	require.Equal(t, intVal(5), dispatchLua(r2, c2, "EVAL", `return cjson.encode_max_depth(5)`, "0"))
+	require.Equal(t, intVal(1), dispatchLua(r2, c2, "EVAL",
+		`return cjson.decode(cjson.encode(`+m100+`))['1']`, "0"))
+	// depth6 → 拒绝。
+	require.Equal(t, intVal(6), dispatchLua(r2, c2, "EVAL", `return cjson.encode_max_depth(6)`, "0"))
+	got = dispatchLua(r2, c2, "EVAL", `return cjson.encode(`+m100+`)`, "0")
+	require.Equal(t, protocol.KindError, got.Kind)
+	// ratio0 禁用 sparse：m100 照填数组（setter 回 false→nil）。
+	r3, c3 := openLuaSetup(t)
+	require.Equal(t, protocol.Value{Kind: protocol.KindBulkString}, dispatchLua(r3, c3, "EVAL", `return cjson.encode_sparse_array(false,0,10)`, "0"))
+	require.Equal(t, intVal(2), dispatchLua(r3, c3, "EVAL",
+		`return cjson.decode(cjson.encode(`+m100+`))[100]`, "0"))
+}

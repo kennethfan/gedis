@@ -1,9 +1,10 @@
 // Package commands 的 cjson 支持：Redis 脚本内置 cjson 库核心子集。
 //
-// 范围（M6-F1 #27 核心 scope）：cjson.encode / cjson.decode / cjson.null /
-// cjson.new / _NAME / _VERSION，与真机 Redis 7.2.6 默认配置行为逐字对齐。
-// 延后（已知差异）：7 个配置函数（encode_number_precision 等）与跨脚本
-// settings 持久化——我方每 EVAL 新沙箱，行为恒等于真机"未调过配置"状态。
+// 范围（M6-F1 #27 核心 scope + M6-F6 #33 配置函数）：cjson.encode /
+// cjson.decode / cjson.null / cjson.new / _NAME / _VERSION，以及 4 个配置函数
+// encode_max_depth / decode_max_depth / encode_number_precision /
+// encode_sparse_array（跨 EVAL 经 LuaRegistry 持久化，new() 实例私有出厂默认）。
+// 与真机 Redis 7.2.6 默认配置行为逐字对齐；不存在 encode_empty_table_as_object。
 package commands
 
 import (
@@ -11,6 +12,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync"
 
 	lua "github.com/yuin/gopher-lua"
 )
@@ -19,6 +21,40 @@ import (
 // return→nil bulk（真机行为）。指针比较识别，不可伪造（沙箱内无其他
 // userdata 来源）。
 var cjsonNull = &lua.LUserData{}
+
+// cjsonSettings 承载可配置项（真机 lua-cjson 全局 settings）：跨 EVAL 持久化
+// 经 LuaRegistry（全局表绑定 reg 全局实例，new() 实例绑定私有出厂默认）。
+// 并发脚本共享同一 Registry，读写经 mu 串行化。
+type cjsonSettings struct {
+	mu          sync.Mutex
+	maxDepth    int64 // encode_max_depth，默认 1000
+	decDepth    int64 // decode_max_depth，默认 1000
+	precision   int64 // encode_number_precision，默认 14
+	sparseConv  bool  // encode_sparse_array 首参，默认 false
+	sparseRatio int64 // 默认 2
+	sparseMax   int64 // 默认 10
+}
+
+func defaultCjsonSettings() *cjsonSettings {
+	return &cjsonSettings{maxDepth: 1000, decDepth: 1000, precision: 14, sparseRatio: 2, sparseMax: 10}
+}
+
+// snap 一次性快照（encode/decode 全程用同一份，避免中途被 setter 改写）。
+type cjsonSnap struct {
+	maxDepth    int64
+	decDepth    int64
+	precision   int
+	sparseConv  bool
+	sparseRatio int64
+	sparseMax   int64
+}
+
+func (s *cjsonSettings) snapshot() cjsonSnap {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cjsonSnap{maxDepth: s.maxDepth, decDepth: s.decDepth, precision: int(s.precision),
+		sparseConv: s.sparseConv, sparseRatio: s.sparseRatio, sparseMax: s.sparseMax}
+}
 
 // registerCjsonLib 注册 cjson 全局表（encode/decode/null/new/_NAME/_VERSION）。
 
@@ -36,12 +72,16 @@ func cjsonRaise(L *lua.LState, msg string) int {
 	L.Error(&cjsonErr{pos: L.Where(1) + " ", msg: msg}, 0)
 	return 0
 }
-func registerCjsonLib(L *lua.LState) {
+func registerCjsonLib(L *lua.LState, cfg *cjsonSettings) {
 	lib := L.NewTable()
 	L.SetFuncs(lib, map[string]lua.LGFunction{
-		"encode": cjsonEncode,
-		"decode": cjsonDecode,
-		"new":    cjsonNew,
+		"encode":               mkCjsonEncode(cfg),
+		"decode":               mkCjsonDecode(cfg),
+		"new":                  cjsonNew,
+		"encode_max_depth":     mkCjsonDepth(cfg, "encode_max_depth", true),
+		"decode_max_depth":     mkCjsonDepth(cfg, "decode_max_depth", false),
+		"encode_number_precision": mkCjsonPrecision(cfg),
+		"encode_sparse_array":  mkCjsonSparse(cfg),
 	})
 	lib.RawSetString("null", cjsonNull)
 	lib.RawSetString("_NAME", lua.LString("cjson"))
@@ -49,11 +89,18 @@ func registerCjsonLib(L *lua.LState) {
 	L.SetGlobal("cjson", lib)
 }
 
-// cjsonNew 返回独立 cjson 实例（核心 scope 下配置恒默认，与全局表同行为）。
+// cjsonNew 返回独立 cjson 实例：私有出厂默认配置（探针：不继承全局修改），
+// 与全局表同函数集（错误文案中函数名亦相同）。
 func cjsonNew(L *lua.LState) int {
+	cfg := defaultCjsonSettings()
 	t := L.NewTable()
-	t.RawSetString("encode", L.NewFunction(cjsonEncode))
-	t.RawSetString("decode", L.NewFunction(cjsonDecode))
+	t.RawSetString("encode", L.NewFunction(mkCjsonEncode(cfg)))
+	t.RawSetString("decode", L.NewFunction(mkCjsonDecode(cfg)))
+	t.RawSetString("new", L.NewFunction(cjsonNew))
+	t.RawSetString("encode_max_depth", L.NewFunction(mkCjsonDepth(cfg, "encode_max_depth", true)))
+	t.RawSetString("decode_max_depth", L.NewFunction(mkCjsonDepth(cfg, "decode_max_depth", false)))
+	t.RawSetString("encode_number_precision", L.NewFunction(mkCjsonPrecision(cfg)))
+	t.RawSetString("encode_sparse_array", L.NewFunction(mkCjsonSparse(cfg)))
 	t.RawSetString("null", cjsonNull)
 	t.RawSetString("_NAME", lua.LString("cjson"))
 	t.RawSetString("_VERSION", lua.LString("2.1.0"))
@@ -61,56 +108,214 @@ func cjsonNew(L *lua.LState) int {
 	return 1
 }
 
-func cjsonEncode(L *lua.LState) int {
-	if L.GetTop() < 1 {
-		cjsonRaise(L, "bad argument #1 to 'encode' (expected 1 argument)")
-		return 0
-	}
-	if _, isNil := L.Get(1).(*lua.LNilType); isNil {
-		L.Push(lua.LNil)
+func mkCjsonEncode(cfg *cjsonSettings) lua.LGFunction {
+	return func(L *lua.LState) int {
+		if L.GetTop() < 1 {
+			cjsonRaise(L, "bad argument #1 to 'encode' (expected 1 argument)")
+			return 0
+		}
+		if _, isNil := L.Get(1).(*lua.LNilType); isNil {
+			L.Push(lua.LNil)
+			return 1
+		}
+		snap := cfg.snapshot()
+		var sb strings.Builder
+		if err := writeJSON(&sb, L.Get(1), snap, 0); err != nil {
+			cjsonRaise(L, err.Error())
+			return 0
+		}
+		L.Push(lua.LString(sb.String()))
 		return 1
 	}
-	var sb strings.Builder
-	if err := writeJSON(&sb, L.Get(1)); err != nil {
-		cjsonRaise(L, err.Error())
-		return 0
-	}
-	L.Push(lua.LString(sb.String()))
-	return 1
 }
 
-func cjsonDecode(L *lua.LState) int {
-	if L.GetTop() < 1 {
-		cjsonRaise(L, "bad argument #1 to 'decode' (expected 1 argument)")
-		return 0
+func mkCjsonDecode(cfg *cjsonSettings) lua.LGFunction {
+	return func(L *lua.LState) int {
+		if L.GetTop() < 1 {
+			cjsonRaise(L, "bad argument #1 to 'decode' (expected 1 argument)")
+			return 0
+		}
+		var s string
+		switch v := L.Get(1).(type) {
+		case lua.LString:
+			s = string(v)
+		case lua.LNumber:
+			// 真机经 luaL_checkstring 把数字转字符串后再解析。
+			s = fmtNum(float64(v), 14)
+		default:
+			cjsonRaise(L, "bad argument #1 to 'decode' (string expected, got "+v.Type().String()+")")
+			return 0
+		}
+		v, msg, ok := decodeJSON(s, cfg.snapshot().decDepth)
+		if !ok {
+			cjsonRaise(L, msg)
+			return 0
+		}
+		L.Push(v)
+		return 1
 	}
-	var s string
-	switch v := L.Get(1).(type) {
-	case lua.LString:
-		s = string(v)
+}
+
+// mkCjsonDepth 通用 depth setter/getter：无参或单 nil→getter；多于 1 参→#2
+// too many；coerce 错→#1 number；range 错→#1（探针：range 违反恒报 #1）。
+func mkCjsonDepth(cfg *cjsonSettings, fname string, isEncode bool) lua.LGFunction {
+	return func(L *lua.LState) int {
+		top := L.GetTop()
+		if top > 1 {
+			cjsonRaise(L, fmt.Sprintf("bad argument #2 to '%s' (found too many arguments)", fname))
+			return 0
+		}
+		cfg.mu.Lock()
+		defer cfg.mu.Unlock()
+		cur := cfg.maxDepth
+		if !isEncode {
+			cur = cfg.decDepth
+		}
+		if top == 0 || L.Get(1) == lua.LNil {
+			L.Push(lua.LNumber(cur))
+			return 1
+		}
+		v, ok := cjsonCheckIntLocked(L, fname, 1)
+		if !ok {
+			return 0
+		}
+		if v < 1 || v > 2147483647 {
+			cjsonRaise(L, "bad argument #1 to '"+fname+"' (expected integer between 1 and 2147483647)")
+			return 0
+		}
+		if isEncode {
+			cfg.maxDepth = v
+		} else {
+			cfg.decDepth = v
+		}
+		L.Push(lua.LNumber(v))
+		return 1
+	}
+}
+
+// cjsonCheckIntLocked 复刻 luaL_checkinteger（number 向零截断、string 经
+// tonumber 转换，余下类型报 number expected）：调用方已持有 cfg.mu；cjsonRaise
+// 经 L.Error 长跳，defer 的 Unlock 仍会执行，无死锁。
+func cjsonCheckIntLocked(L *lua.LState, fname string, n int) (int64, bool) {
+	v := L.Get(n)
+	switch t := v.(type) {
 	case lua.LNumber:
-		// 真机经 luaL_checkstring 把数字转字符串后再解析。
-		s = fmtNum(float64(v))
-	default:
-		cjsonRaise(L, "bad argument #1 to 'decode' (string expected, got "+v.Type().String()+")")
-		return 0
+		return int64(t), true
+	case lua.LString:
+		if f, err := strconv.ParseFloat(strings.TrimSpace(string(t)), 64); err == nil {
+			return int64(f), true
+		}
 	}
-	v, msg, ok := decodeJSON(s)
-	if !ok {
-		cjsonRaise(L, msg)
-		return 0
-	}
-	L.Push(v)
-	return 1
+	cjsonRaise(L, fmt.Sprintf("bad argument #%d to '%s' (number expected, got %s)", n, fname, v.Type()))
+	return 0, false
 }
 
-// fmtNum 复刻 lua-cjson 默认精度（%.14g）：整数无小数点，大数转科学计数。
-func fmtNum(f float64) string {
-	return strconv.FormatFloat(f, 'g', 14, 64)
+func mkCjsonPrecision(cfg *cjsonSettings) lua.LGFunction {
+	const fname = "encode_number_precision"
+	return func(L *lua.LState) int {
+		top := L.GetTop()
+		if top > 1 {
+			cjsonRaise(L, fmt.Sprintf("bad argument #2 to '%s' (found too many arguments)", fname))
+			return 0
+		}
+		cfg.mu.Lock()
+		defer cfg.mu.Unlock()
+		if top == 0 || L.Get(1) == lua.LNil {
+			L.Push(lua.LNumber(cfg.precision))
+			return 1
+		}
+		v, ok := cjsonCheckIntLocked(L, fname, 1)
+		if !ok {
+			return 0
+		}
+		if v < 1 || v > 14 {
+			cjsonRaise(L, "bad argument #1 to '"+fname+"' (expected integer between 1 and 14)")
+			return 0
+		}
+		cfg.precision = v
+		L.Push(lua.LNumber(v))
+		return 1
+	}
+}
+
+// mkCjsonSparse 实现 encode_sparse_array：0 参→triple getter；首参 nil（单参）
+// →getter；boolean→convert setter；string/number→invalid option 原文；其他类型
+// →string expected。后参缺省（nil）保当前值；第 4 参→#4 too many。
+func mkCjsonSparse(cfg *cjsonSettings) lua.LGFunction {
+	const fname = "encode_sparse_array"
+	return func(L *lua.LState) int {
+		top := L.GetTop()
+		if top > 3 {
+			cjsonRaise(L, fmt.Sprintf("bad argument #4 to '%s' (found too many arguments)", fname))
+			return 0
+		}
+		cfg.mu.Lock()
+		defer cfg.mu.Unlock()
+		if top == 0 {
+			pushSparseTriple(L, cfg)
+			return 3
+		}
+		a1 := L.Get(1)
+		if _, isNil := a1.(*lua.LNilType); isNil && top == 1 {
+			pushSparseTriple(L, cfg)
+			return 3
+		}
+		switch t := a1.(type) {
+		case lua.LBool:
+			cfg.sparseConv = bool(t)
+		case *lua.LNilType:
+			// nil + 后参 = setter，只改非 nil 后参。
+		case lua.LString:
+			cjsonRaise(L, fmt.Sprintf("invalid option '%s'", string(t)))
+			return 0
+		case lua.LNumber:
+			cjsonRaise(L, fmt.Sprintf("invalid option '%s'", t.String()))
+			return 0
+		default:
+			cjsonRaise(L, fmt.Sprintf("bad argument #1 to '%s' (string expected, got %s)", fname, a1.Type()))
+			return 0
+		}
+		if top >= 2 && L.Get(2) != lua.LNil {
+			v, ok := cjsonCheckIntLocked(L, fname, 2)
+			if !ok {
+				return 0
+			}
+			if v < 0 || v > 2147483647 {
+				cjsonRaise(L, "bad argument #1 to '"+fname+"' (expected integer between 0 and 2147483647)")
+				return 0
+			}
+			cfg.sparseRatio = v
+		}
+		if top >= 3 && L.Get(3) != lua.LNil {
+			v, ok := cjsonCheckIntLocked(L, fname, 3)
+			if !ok {
+				return 0
+			}
+			if v < 0 || v > 2147483647 {
+				cjsonRaise(L, "bad argument #1 to '"+fname+"' (expected integer between 0 and 2147483647)")
+				return 0
+			}
+			cfg.sparseMax = v
+		}
+		L.Push(lua.LBool(cfg.sparseConv))
+		return 1
+	}
+}
+
+func pushSparseTriple(L *lua.LState, cfg *cjsonSettings) {
+	L.Push(lua.LBool(cfg.sparseConv))
+	L.Push(lua.LNumber(cfg.sparseRatio))
+	L.Push(lua.LNumber(cfg.sparseMax))
+}
+
+// fmtNum 按配置精度格式化浮点（默认 %.14g）：整数无小数点，大数转科学计数。
+func fmtNum(f float64, prec int) string {
+	return strconv.FormatFloat(f, 'g', prec, 64)
 }
 
 // writeJSON 编码 Lua 值；错误文案逐字复刻 lua-cjson（含英式 serialise）。
-func writeJSON(sb *strings.Builder, v lua.LValue) error {
+// level 为当前嵌套层（top-level 调用传 0，table/array 进位后与 maxDepth 比较）。
+func writeJSON(sb *strings.Builder, v lua.LValue, snap cjsonSnap, level int64) error {
 	switch t := v.(type) {
 	case lua.LBool:
 		if bool(t) {
@@ -123,11 +328,15 @@ func writeJSON(sb *strings.Builder, v lua.LValue) error {
 		if math.IsNaN(f) || math.IsInf(f, 0) {
 			return fmt.Errorf("Cannot serialise number: must not be NaN or Inf")
 		}
-		sb.WriteString(fmtNum(f))
+		sb.WriteString(fmtNum(f, snap.precision))
 	case lua.LString:
 		writeJSONString(sb, string(t))
 	case *lua.LTable:
-		return writeJSONObject(sb, t)
+		lv := level + 1
+		if lv > snap.maxDepth {
+			return fmt.Errorf("Cannot serialise, excessive nesting (%d)", lv)
+		}
+		return writeJSONObject(sb, t, snap, lv)
 	default:
 		if ud, ok := v.(*lua.LUserData); ok && ud == cjsonNull {
 			sb.WriteString("null")
@@ -172,10 +381,17 @@ func writeJSONString(sb *strings.Builder, s string) {
 	sb.WriteByte('"')
 }
 
-// writeJSONObject 判定数组/对象：键全为 ≥1 整数→数组（1..max，洞补 null）；
-// 否则对象（全键保留，数字键经 fmtNum 字符串化）；空表→{}（探针实证）。
-func writeJSONObject(sb *strings.Builder, t *lua.LTable) error {
+// writeJSONObject 判定数组/对象/稀疏拒绝（探针锁定的 FINAL MODEL）：
+// 键非全 ≥1 整数→对象（全键保留，数字键经配置精度字符串化）；空表→{}；
+// maxIdx≤sparseMax→ARRAY（null 填洞，不看 ratio）；否则 ratio 门：
+// ratio>0 且 maxIdx/count>ratio（STRICT）才算 sparse，否则 ARRAY；
+// sparse+convert→对象；sparse+!convert→error，除非 depth≤5 且 maxSet==10
+// 则回退对象（razor-edge：30+ 观测锁定，唯一反例 m100/d5/max10，
+// 邻域 m100/d6+、m100/d5/max20、m100/d5/max5 全 err；未来 fuzz 若推翻此
+// 微区，优先以新观测为准）。
+func writeJSONObject(sb *strings.Builder, t *lua.LTable, snap cjsonSnap, level int64) error {
 	maxIdx := 0
+	count := 0
 	isArray := true
 	keys := tableKeys(t)
 	if len(keys) == 0 {
@@ -187,9 +403,17 @@ func writeJSONObject(sb *strings.Builder, t *lua.LTable) error {
 			if int(n) > maxIdx {
 				maxIdx = int(n)
 			}
+			count++
 			continue
 		}
 		isArray = false
+	}
+	if isArray && (int64(maxIdx) > snap.sparseMax) &&
+		snap.sparseRatio > 0 && float64(maxIdx)/float64(count) > float64(snap.sparseRatio) {
+		if !snap.sparseConv && (snap.maxDepth > 5 || snap.sparseMax != 10) {
+			return fmt.Errorf("Cannot serialise table: excessively sparse array")
+		}
+		return writeJSONObjectAsObject(sb, t, keys, snap, level)
 	}
 	if isArray {
 		sb.WriteByte('[')
@@ -202,13 +426,17 @@ func writeJSONObject(sb *strings.Builder, t *lua.LTable) error {
 				sb.WriteString("null")
 				continue
 			}
-			if err := writeJSON(sb, item); err != nil {
+			if err := writeJSON(sb, item, snap, level); err != nil {
 				return err
 			}
 		}
 		sb.WriteByte(']')
 		return nil
 	}
+	return writeJSONObjectAsObject(sb, t, keys, snap, level)
+}
+
+func writeJSONObjectAsObject(sb *strings.Builder, t *lua.LTable, keys []lua.LValue, snap cjsonSnap, level int64) error {
 	sb.WriteByte('{')
 	for i, k := range keys {
 		if i > 0 {
@@ -219,13 +447,13 @@ func writeJSONObject(sb *strings.Builder, t *lua.LTable) error {
 		case lua.LString:
 			ks = string(n)
 		case lua.LNumber:
-			ks = fmtNum(float64(n))
+			ks = fmtNum(float64(n), snap.precision)
 		default:
 			return fmt.Errorf("Cannot serialise %s: table key must be a number or string", luaTypeName(k))
 		}
 		writeJSONString(sb, ks)
 		sb.WriteByte(':')
-		if err := writeJSON(sb, t.RawGet(k)); err != nil {
+		if err := writeJSON(sb, t.RawGet(k), snap, level); err != nil {
 			return err
 		}
 	}
@@ -258,13 +486,14 @@ func jerror(expect, found string, charNo int) *jerr {
 }
 
 type jdec struct {
-	s string
-	p int // 下一个待读字节下标；字符号 = p+1
+	s   string
+	p   int // 下一个待读字节下标；字符号 = p+1
+	max int64
 }
 
-func decodeJSON(s string) (lua.LValue, string, bool) {
-	d := &jdec{s: s}
-	v, e := d.parseValue("value")
+func decodeJSON(s string, maxDepth int64) (lua.LValue, string, bool) {
+	d := &jdec{s: s, max: maxDepth}
+	v, e := d.parseValue("value", 0)
 	if e != nil {
 		return nil, e.msg, false
 	}
@@ -374,7 +603,7 @@ func numLen(s string, p int) int {
 	return i - p
 }
 
-func (d *jdec) parseValue(expect string) (lua.LValue, *jerr) {
+func (d *jdec) parseValue(expect string, depth int64) (lua.LValue, *jerr) {
 	d.skipWS()
 	if d.p >= len(d.s) {
 		return nil, jerror(expect, "T_END", d.p+1)
@@ -382,10 +611,14 @@ func (d *jdec) parseValue(expect string) (lua.LValue, *jerr) {
 	switch c := d.s[d.p]; {
 	case c == '"':
 		return d.parseString()
-	case c == '{':
-		return d.parseObject()
-	case c == '[':
-		return d.parseArray()
+	case c == '{', c == '[':
+		if lv := depth + 1; lv > d.max {
+			return nil, &jerr{fmt.Sprintf("Found too many nested data structures (%d) at character %d", lv, d.p+1)}
+		} else if c == '{' {
+			return d.parseObject(lv)
+		} else {
+			return d.parseArray(lv)
+		}
 	case c == 't' && strings.HasPrefix(d.s[d.p:], "true"):
 		d.p += 4
 		return lua.LBool(true), nil
@@ -523,7 +756,7 @@ func (d *jdec) hex4() (int, bool) {
 	return v, true
 }
 
-func (d *jdec) parseObject() (lua.LValue, *jerr) {
+func (d *jdec) parseObject(depth int64) (lua.LValue, *jerr) {
 	d.p++ // '{'
 	t := &lua.LTable{}
 	d.skipWS()
@@ -546,7 +779,7 @@ func (d *jdec) parseObject() (lua.LValue, *jerr) {
 			return nil, jerror("colon", d.tokenName(), d.p+1)
 		}
 		d.p++
-		v, e := d.parseValue("value")
+		v, e := d.parseValue("value", depth)
 		if e != nil {
 			return nil, e
 		}
@@ -564,7 +797,7 @@ func (d *jdec) parseObject() (lua.LValue, *jerr) {
 	}
 }
 
-func (d *jdec) parseArray() (lua.LValue, *jerr) {
+func (d *jdec) parseArray(depth int64) (lua.LValue, *jerr) {
 	d.p++ // '['
 	t := &lua.LTable{}
 	d.skipWS()
@@ -574,7 +807,7 @@ func (d *jdec) parseArray() (lua.LValue, *jerr) {
 	}
 	n := 0
 	for {
-		v, e := d.parseValue("value")
+		v, e := d.parseValue("value", depth)
 		if e != nil {
 			return nil, e
 		}
