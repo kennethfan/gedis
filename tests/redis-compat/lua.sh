@@ -137,6 +137,34 @@ echo "### COMPILE" >> "$REDIS_OUT"
 redis-cli -p "$GEDIS_PORT" EVAL "return {{{" 0 2>&1 | sed 's/user_script.*/user_script NORM/' >> "$GEDIS_OUT" || true
 redis-cli -p "$REDIS_PORT" EVAL "return {{{" 0 2>&1 | sed 's/user_script.*/user_script NORM/' >> "$REDIS_OUT" || true
 
+# cjson：encode/decode 映射与错误文案（同体 EVAL → 同 sha，错误确定性可比；
+# 对象只用单键，避开双方键序差异）
+run_both EVAL "return cjson.encode('hello')" 0
+run_both EVAL "return cjson.encode({1,2,3})" 0
+run_both EVAL "return cjson.encode({})" 0
+run_both EVAL "return cjson.encode(1/3)" 0
+run_both EVAL "return cjson.encode({name='bob'})" 0
+run_both EVAL "return cjson.encode(0/0)" 0
+run_both EVAL "return cjson.encode({[true]='x'})" 0
+run_both EVAL "return cjson.encode()" 0
+run_both EVAL "return cjson.decode('{\"a\":1}').a" 0
+run_both EVAL "return cjson.decode('[1,2]')[2]" 0
+run_both EVAL "return cjson.decode('null') == cjson.null" 0
+run_both EVAL "return cjson.null" 0
+run_both EVAL "return cjson.decode('{bad')" 0
+run_both EVAL "return cjson.decode('[1,]')" 0
+run_both EVAL "local ok,err=pcall(cjson.decode,'{bad'); return err" 0
+run_both EVAL "return cjson.decode(42)" 0
+run_both EVAL "return cjson.decode()" 0
+run_both EVAL "return cjson.decode('\"\\u0041\"')" 0
+run_both EVAL "return cjson.encode('😀')" 0
+run_both EVAL "return cjson.encode(cjson.decode('{\"a\":1}'))" 0
+run_both EVAL "local c=cjson.new(); return c.encode({1})" 0
+run_both EVAL "return cjson.decode('[+2]')[1]" 0
+run_both EVAL "return cjson.decode('[1 2]')" 0
+run_both EVAL "return cjson.decode('{\"a\" 1}')" 0
+run_both EVAL "return cjson.decode('[1}]')" 0
+
 # SCRIPT KILL：NOTBUSY 与 arity 为确定性对照
 run_both SCRIPT KILL
 run_both SCRIPT KILL extra

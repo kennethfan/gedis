@@ -276,6 +276,7 @@ func (e *luaExec) run(ctx context.Context, body string, keys, argv []string) pro
 	L.SetGlobal("ARGV", strSliceTable(L, argv))
 	rr := &luaRun{cancel: cancel}
 	e.registerRedisLib(L, ctx, rr)
+	registerCjsonLib(L)
 
 	fn, err := L.Load(strings.NewReader(body), "user_script")
 	if err != nil {
@@ -288,6 +289,9 @@ func (e *luaExec) run(ctx context.Context, body string, keys, argv []string) pro
 		if e.reg.wasKilled(rr) {
 			return errValueStr("ERR Script killed by user with SCRIPT KILL... script: " + sha + ", on @user_script:1.")
 		}
+		if cemsg, ok := cjsonErrFrom(err); ok {
+			return errValueStr(fmt.Sprintf("ERR %s script: %s, on @user_script:1.", cemsg, sha))
+		}
 		msg, _, _ := strings.Cut(err.Error(), "\n")
 		return scriptError(msg, sha)
 	}
@@ -298,6 +302,19 @@ func (e *luaExec) run(ctx context.Context, body string, keys, argv []string) pro
 		return scriptError(err.Error(), sha)
 	}
 	return v
+}
+
+// cjsonErrFrom 识别 cjson 原文错误（*cjsonErr，经 ApiError.Object 透出）：
+// 真机格式为 `ERR <调用位><msg> script: ...`，此处同样组装（含调用位）。
+func cjsonErrFrom(err error) (string, bool) {
+	var apiErr *lua.ApiError
+	if errors.As(err, &apiErr) {
+		if ce, ok := apiErr.Object.(*cjsonErr); ok {
+			msg, _, _ := strings.Cut(ce.msg, "\n")
+			return ce.pos + msg, true
+		}
+	}
+	return "", false
 }
 
 // scriptError 包运行时错误外层：自带 ERR /WRONGTYPE 前缀的不再补。
@@ -486,6 +503,14 @@ func luaToResp(v lua.LValue) (protocol.Value, error) {
 			out = []protocol.Value{}
 		}
 		return protocol.ArrayOf(out...), nil
+	case *lua.LUserData:
+		if t == cjsonNull {
+			return protocol.Value{Kind: protocol.KindBulkString}, nil
+		}
+		return protocol.Value{}, fmt.Errorf("Lua redis() return value not convertible to RESP")
+	case *cjsonErr:
+		// pcall 捕获的 cjson 错误：真机按普通字符串返回。
+		return protocol.BulkOf(t.msg), nil
 	default:
 		return protocol.Value{}, fmt.Errorf("Lua redis() return value not convertible to RESP")
 	}
