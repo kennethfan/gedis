@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # EVAL/EVALSHA/SCRIPT 与真 Redis 的输出对照：同一命令序列分别发往 gedis 与 redis-server，逐行 diff。
-# 已知差异：编译错误措辞（gopher-lua 解析器 vs Lua 5.1，见 lua.go compileDetail），该用例经
-# normalize 抹掉 user_script 之后的部分再比；死循环超时用例跳过（两侧各 5s+ 且真机进 BUSY 态）。
+# 已知差异：通用编译错误措辞（gopher-lua 解析器 vs Lua 5.1，见 lua.go compileDetail），
+# 该用例经 normalize 抹掉 user_script 之后的部分再比；四类（非法16进制/未闭合串/
+# 未闭合长注释/goto无标签）已逐字对齐、严格比对；死循环超时用例跳过（两侧各 5s+ 且真机进 BUSY 态）。
 set -euo pipefail
 
 GEDIS_PORT=6395
@@ -131,11 +132,19 @@ run_both EVAL "return redis.error_reply('bad')" 0
 lua_seq "eval-in-multi" "MULTI\nEVAL \"return redis.call('SET','mk','1')\" 0\nEXEC\n"
 run_both GET mk
 
-# 编译错误：两侧措辞不同，normalize 后只比前缀
+# 编译错误：通用类措辞不同，normalize 后只比前缀；四类映射已与真机逐字对齐，严格比对
 echo "### COMPILE" >> "$GEDIS_OUT"
 echo "### COMPILE" >> "$REDIS_OUT"
 redis-cli -p "$GEDIS_PORT" EVAL "return {{{" 0 2>&1 | sed 's/user_script.*/user_script NORM/' >> "$GEDIS_OUT" || true
 redis-cli -p "$REDIS_PORT" EVAL "return {{{" 0 2>&1 | sed 's/user_script.*/user_script NORM/' >> "$REDIS_OUT" || true
+run_both EVAL "return 0x" 0
+run_both EVAL "return 0xG" 0
+run_both EVAL "return 'abc" 0
+run_both EVAL 'return "abc' 0
+run_both EVAL "return --[[x" 0
+run_both EVAL "goto foo" 0
+lua_seq "compile-multiline-string" "EVAL \"return 'abc\\nreturn 1\" 0\n"
+lua_seq "compile-multiline-comment" "EVAL \"return --[[x\\n+1\" 0\n"
 
 # cjson：encode/decode 映射与错误文案（同体 EVAL → 同 sha，错误确定性可比；
 # 对象只用单键，避开双方键序差异）

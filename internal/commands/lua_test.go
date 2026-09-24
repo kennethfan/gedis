@@ -143,6 +143,32 @@ func Test_Lua_when_ScriptErrors(t *testing.T) {
 	require.Contains(t, got.S, "ERR Error compiling script (new function): user_script:1: ")
 }
 
+// WM: 编译错误四类映射与真机逐字对齐（7.2.6 探针），其余保留 gopher 原文
+func Test_Lua_when_CompileWording(t *testing.T) {
+	r, c := openLuaSetup(t)
+	want := func(script, detail string) protocol.Value {
+		return protocol.Value{Kind: protocol.KindError,
+			S: "ERR Error compiling script (new function): " + detail}
+	}
+	cases := []struct{ script, detail string }{
+		{"return 0x", "user_script:1: malformed number near '0x'"},
+		{"return 0xG", "user_script:1: malformed number near '0xG'"},
+		{"return 'abc", "user_script:1: unfinished string near '<eof>'"},
+		{`return "abc`, "user_script:1: unfinished string near '<eof>'"},
+		{"return 'abc\nreturn 1", "user_script:1: unfinished string near ''abc'"},
+		{"return --[[x", "user_script:1: unfinished long comment near '<eof>'"},
+		{"return --[[x\n+1", "user_script:2: unfinished long comment near '<eof>'"},
+		{"goto foo", "user_script:1: '=' expected near 'foo'"},
+	}
+	for _, tc := range cases {
+		require.Equal(t, want(tc.script, tc.detail),
+			dispatchLua(r, c, "EVAL", tc.script, "0"), "script %q", tc.script)
+	}
+	got := dispatchLua(r, c, "EVAL", "return 1+", "0")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "user_script:1: syntax error")
+}
+
 // WM: numkeys 非法三件套 + argc 不足
 func Test_Lua_when_BadNumkeys(t *testing.T) {
 	r, c := openLuaSetup(t)

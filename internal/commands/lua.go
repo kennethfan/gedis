@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -333,19 +334,27 @@ func scriptError(msg, sha string) protocol.Value {
 	return errValueStr(fmt.Sprintf("%s script: %s, on @user_script:1.", msg, sha))
 }
 
-// compileDetail 把 gopher-lua 编译错误重排为 `user_script:行: 信息`（近似真机文案；
-// 解析器措辞与 Lua 5.1 原生不同属已知差异，compat 只断言前缀）。
+// compileDetail 把 gopher-lua 编译错误重排为 `user_script:行: 信息`。四类可精确
+// 映射为 Lua 5.1 原生措辞（7.2.6 探针逐字对齐），其余保留 gopher 原文。
 func compileDetail(body string, err error) string {
 	cause := err
 	var apiErr *lua.ApiError
 	if errors.As(err, &apiErr) && apiErr.Cause != nil {
 		cause = apiErr.Cause
 	}
+	if cerr, ok := cause.(*lua.CompileError); ok {
+		if m := gotoLabelRe.FindStringSubmatch(cerr.Error()); m != nil {
+			return fmt.Sprintf("user_script:%s: '=' expected near '%s'", m[2], m[1])
+		}
+	}
 	var perr *parse.Error
 	if errors.As(cause, &perr) {
 		line := perr.Pos.Line
 		if line == parse.EOF {
 			line = strings.Count(body, "\n") + 1
+		}
+		if mapped, ok := mapParseMessage(body, line, perr); ok {
+			return mapped
 		}
 		return fmt.Sprintf("user_script:%d: %s", line, perr.Message)
 	}
@@ -354,6 +363,96 @@ func compileDetail(body string, err error) string {
 		return strings.TrimRight(msg[i:], "\n")
 	}
 	return "user_script:1: " + msg
+}
+
+// gotoLabelRe 提取 gopher `no visible label 'X' for <goto> at line N` 的标签与行号。
+var gotoLabelRe = regexp.MustCompile(`no visible label '([^']*)' for <goto> at line (\d+)`)
+
+// mapParseMessage 把四类 gopher parse 错误改写为 Lua 5.1 原生措辞，ok=false
+// 时调用方回退 gopher 原文。映射规则（7.2.6 探针）：
+//   - 非法 16 进制：`malformed number near '<字面量>'`，字面量按错误列在正文定位后
+//     向后吞 [0-9A-Za-z_.]（`0x`→`0x`，`0xG`→`0xG`）。
+//   - 未闭合串：行尾/EOF→`near '<eof>'`；跨行→行号回退到起始引号行，
+//     near 为原文照抄字面量套一层引号（`'abc`→`''abc'`）。
+//   - 未闭合长注释：行号为正文末行，`unfinished long comment near '<eof>'`。
+func mapParseMessage(body string, line int, perr *parse.Error) (string, bool) {
+	switch perr.Message {
+	case "illegal hexadecimal number":
+		return fmt.Sprintf("user_script:%d: malformed number near '%s'",
+			line, hexLiteral(body, line, perr.Pos.Column)), true
+	case "unterminated string":
+		if perr.Pos.Line == parse.EOF {
+			return fmt.Sprintf("user_script:%d: unfinished string near '<eof>'", line), true
+		}
+		open := line - 1
+		if q, ok := stringQuote(body, open, perr.Token); ok {
+			return fmt.Sprintf("user_script:%d: unfinished string near '%s'",
+				open, q+perr.Token), true
+		}
+		return "", false
+	case "invalid multiline comment":
+		return fmt.Sprintf("user_script:%d: unfinished long comment near '<eof>'", line), true
+	}
+	return "", false
+}
+
+// bodyLine 取正文第 n 行（1-based）。
+func bodyLine(body string, n int) (string, bool) {
+	if n < 1 {
+		return "", false
+	}
+	lines := strings.Split(body, "\n")
+	if n > len(lines) {
+		return "", false
+	}
+	return lines[n-1], true
+}
+
+// hexLiteral 在错误行按列定位 `0x` 后吞出完整数字字面量；定位失败时退 Token。
+func hexLiteral(body string, line, col int) string {
+	if ln, ok := bodyLine(body, line); ok && col >= 1 {
+		if i := col - 1; i+1 < len(ln) && ln[i] == '0' && (ln[i+1] == 'x' || ln[i+1] == 'X') {
+			j := i + 2
+			for j < len(ln) && isHexLitChar(ln[j]) {
+				j++
+			}
+			return ln[i:j]
+		}
+		if i := strings.Index(ln, "0x"); i >= 0 {
+			return hexExtend(ln, i)
+		}
+		if i := strings.Index(ln, "0X"); i >= 0 {
+			return hexExtend(ln, i)
+		}
+	}
+	return "0x"
+}
+
+func hexExtend(ln string, i int) string {
+	j := i + 2
+	for j < len(ln) && isHexLitChar(ln[j]) {
+		j++
+	}
+	return ln[i:j]
+}
+
+func isHexLitChar(c byte) bool {
+	return '0' <= c && c <= '9' || 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || c == '_' || c == '.'
+}
+
+// stringQuote 在起始行找 `'`/`"`+Token 确定字符串开引号；找不到时不映射。
+func stringQuote(body string, openLine int, token string) (string, bool) {
+	ln, ok := bodyLine(body, openLine)
+	if !ok || token == "" {
+		return "", false
+	}
+	if strings.Contains(ln, "'"+token) {
+		return "'", true
+	}
+	if strings.Contains(ln, `"`+token) {
+		return `"`, true
+	}
+	return "", false
 }
 
 func strSliceTable(L *lua.LState, ss []string) *lua.LTable {
