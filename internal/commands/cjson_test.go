@@ -57,7 +57,7 @@ func Test_Lua_when_CjsonEncodeErrors(t *testing.T) {
 	require.Equal(t, "ERR user_script:1: Cannot serialise number: must not be NaN or Inf script: "+sha(s)+", on @user_script:1.", errOf(s).S)
 	s = "return cjson.encode({[true]=1})"
 	require.Equal(t, "ERR user_script:1: Cannot serialise boolean: table key must be a number or string script: "+sha(s)+", on @user_script:1.", errOf(s).S)
-	s = "return cjson.encode({print})"
+	s = "return cjson.encode({tostring})"
 	require.Equal(t, "ERR user_script:1: Cannot serialise function: type not supported script: "+sha(s)+", on @user_script:1.", errOf(s).S)
 	s = "return cjson.encode()"
 	require.Equal(t, "ERR user_script:1: bad argument #1 to 'encode' (expected 1 argument) script: "+sha(s)+", on @user_script:1.", errOf(s).S)

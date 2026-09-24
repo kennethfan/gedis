@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -286,6 +287,7 @@ func (e *luaExec) run(ctx context.Context, body string, keys, argv []string) pro
 	rr := &luaRun{cancel: cancel}
 	e.registerRedisLib(L, ctx, rr)
 	registerCjsonLib(L)
+	hardenSandbox(L)
 
 	fn, err := L.Load(strings.NewReader(body), "user_script")
 	if err != nil {
@@ -479,6 +481,148 @@ func (e *luaExec) registerRedisLib(L *lua.LState, ctx context.Context, rr *luaRu
 		lib.RawSetString(k, lua.LNumber(v))
 	}
 	L.SetGlobal("redis", lib)
+}
+
+// sandboxStripGlobals 为 gopher-lua 独有、真机沙箱不存在的全局键（#32，真机 7.2.6 _G 键集合对照）。
+var sandboxStripGlobals = []string{
+	"_GOPHER_LUA_VERSION", "_printregs", "channel", "debug", "dofile",
+	"io", "loadfile", "module", "os", "package", "print", "require",
+}
+
+// sandboxReadonlyLibs 为真机只读的子库表：写即 `Attempt to modify a readonly table`（带位置）。
+var sandboxReadonlyLibs = []string{
+	"string", "table", "math", "coroutine", "redis", "cjson",
+}
+
+func sandboxReadonly(L *lua.LState) int {
+	L.RaiseError("Attempt to modify a readonly table")
+	return 0
+}
+
+// hardenSandbox 在 run 内、Load 之前收紧沙箱（每 EVAL 一副新 LState，库表均为私有，可放心加元表）。
+// 真机连存量全局覆写（tostring=1）都拒绝，而 Lua __newindex 只对缺键触发，
+// 故用空代理表替换 L.G.Global：一切写都撞上 __newindex，读经 __index 委托 backup。
+func hardenSandbox(L *lua.LState) {
+	for _, name := range sandboxReadonlyLibs {
+		if lib, ok := L.GetGlobal(name).(*lua.LTable); ok {
+			L.G.Global.RawSetString(name, readonlyLibProxy(L, lib))
+		}
+	}
+	for _, name := range sandboxStripGlobals {
+		L.G.Global.RawSetString(name, lua.LNil)
+	}
+	backup := L.G.Global
+	proxy := L.NewTable()
+	proxy.RawSetString("_G", proxy)
+	mt := L.NewTable()
+	mt.RawSetString("__index", L.NewClosure(sandboxIndex, backup))
+	mt.RawSetString("__newindex", L.NewFunction(sandboxReadonly))
+	mt.RawSetString("__metatable", L.NewTable())
+	L.SetMetatable(proxy, mt)
+	L.G.Global = proxy
+	// chunk 的全局 env 取自 L.Env（NewState 快照），换表必须联动，否则脚本仍跑在旧表上。
+	L.Env = proxy
+	// 以下新增全局一律 RawSet 进 proxy：SetGlobal 会走 __newindex（新键直接panic）。
+	wrapLoad(L)
+	wrapRaw(L)
+	// gcinfo: gopher-lua 未提供；真机返回 Lua 堆 KB（进程相关，无逐字对齐）。
+	// 此处返回 Go 进程堆 KB，保证存在性与数字类型（`type(gcinfo())` → number）。
+	L.G.Global.RawSetString("gcinfo", L.NewFunction(func(L *lua.LState) int {
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		L.Push(lua.LNumber(float64(m.Alloc) / 1024))
+		return 1
+	}))
+}
+
+// readonlyLibProxy 把库表换成空代理：一切写撞 __newindex，读经 __index 透出
+// （缺字段回 nil，与真机一致）。存量字段覆写也必须拦，真机同样拒绝。
+func readonlyLibProxy(L *lua.LState, backup *lua.LTable) *lua.LTable {
+	p := L.NewTable()
+	mt := L.NewTable()
+	mt.RawSetString("__index", L.NewClosure(libIndex, backup))
+	mt.RawSetString("__newindex", L.NewFunction(sandboxReadonly))
+	L.SetMetatable(p, mt)
+	return p
+}
+
+// libIndex 库代理读：有则透出，无则 nil（真机行为，不报错）。
+func libIndex(L *lua.LState) int {
+	bk := L.Get(lua.UpvalueIndex(1)).(*lua.LTable)
+	L.Push(bk.RawGet(L.Get(2)))
+	return 1
+}
+
+// sandboxIndex 代理读：backup 有则透出，无则报未声明（backup 经 upvalue 传入）。
+func sandboxIndex(L *lua.LState) int {
+	bk := L.Get(lua.UpvalueIndex(1)).(*lua.LTable)
+	key := L.CheckString(2)
+	if v := bk.RawGetString(key); v != lua.LNil {
+		L.Push(v)
+		return 1
+	}
+	L.RaiseError(fmt.Sprintf("Script attempted to access nonexistent global variable '%s'", key))
+	return 0
+}
+
+// wrapLoad 将 load 阉割为仅接受 function（真机行为；string 参数→带位置 bad argument）。
+func wrapLoad(L *lua.LState) {
+	orig := L.GetGlobal("load")
+	L.G.Global.RawSetString("load", L.NewFunction(func(L *lua.LState) int {
+		if _, ok := L.Get(1).(*lua.LFunction); !ok {
+			L.RaiseError(fmt.Sprintf("bad argument #1 to 'load' (function expected, got %s)", L.Get(1).Type().String()))
+		}
+		n := L.GetTop()
+		L.Push(orig)
+		for i := 1; i <= n; i++ {
+			L.Push(L.Get(i))
+		}
+		if err := L.PCall(n, lua.MultRet, nil); err != nil {
+			msg, _, _ := strings.Cut(err.Error(), "\n")
+			sandboxReraise(L, msg)
+		}
+		return L.GetTop() - n
+	}))
+}
+
+// wrapRaw 包装 rawset/setmetatable：作用于 _G 即无位置 readonly 错误，其余委托原函数。
+func wrapRaw(L *lua.LState) {
+	origSet := L.GetGlobal("rawset")
+	L.G.Global.RawSetString("rawset", L.NewFunction(func(L *lua.LState) int {
+		if t, ok := L.Get(1).(*lua.LTable); ok && t == L.G.Global {
+			L.Error(lua.LString("Attempt to modify a readonly table"), 0)
+		}
+		return sandboxDelegate(L, origSet)
+	}))
+	origMeta := L.GetGlobal("setmetatable")
+	L.G.Global.RawSetString("setmetatable", L.NewFunction(func(L *lua.LState) int {
+		if t, ok := L.Get(1).(*lua.LTable); ok && t == L.G.Global {
+			L.Error(lua.LString("Attempt to modify a readonly table"), 0)
+		}
+		return sandboxDelegate(L, origMeta)
+	}))
+}
+
+// sandboxReraise 重抛委托失败：已有位置则保持（0 级），否则按 C 错误惯例补位置。
+func sandboxReraise(L *lua.LState, msg string) {
+	if strings.HasPrefix(msg, "user_script:") {
+		L.Error(lua.LString(msg), 0)
+	}
+	L.RaiseError(msg)
+}
+
+// sandboxDelegate 转调原函数：成功透传多返回值，失败重抛（位置规则见 sandboxReraise）。
+func sandboxDelegate(L *lua.LState, orig lua.LValue) int {
+	n := L.GetTop()
+	L.Push(orig)
+	for i := 1; i <= n; i++ {
+		L.Push(L.Get(i))
+	}
+	if err := L.PCall(n, lua.MultRet, nil); err != nil {
+		msg, _, _ := strings.Cut(err.Error(), "\n")
+		sandboxReraise(L, msg)
+	}
+	return L.GetTop() - n
 }
 
 func luaSha1hex(L *lua.LState) int {

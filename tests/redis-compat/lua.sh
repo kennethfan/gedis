@@ -195,6 +195,24 @@ run_both EVAL "return redis.call('publish','ch','m')" 0
 run_both XADD sk 1-1 f v
 run_both EVAL "return redis.call('xread','BLOCK',100,'STREAMS','sk','0-0')" 0
 
+# 沙箱：未声明读/全局写/库表写/剥离/load 阉割/raw 绕过（同体 EVAL → 同 sha 可比；
+# gcinfo 只比类型，值进程相关；KEYS 写放行）
+run_both EVAL "return foo" 0
+run_both EVAL "return _G.qqq" 0
+run_both EVAL "x = 1 return 1" 0
+run_both EVAL "tostring = 1 return 1" 0
+run_both EVAL "redis.call = 1 return 1" 0
+run_both EVAL "string.foo = 1 return 1" 0
+run_both EVAL "return print" 0
+run_both EVAL "return os" 0
+run_both EVAL "return load('return 1')" 0
+run_both EVAL "return type(gcinfo())" 0
+run_both EVAL "return loadstring('return 42')()" 0
+run_both EVAL "return #(getmetatable(_G))" 0
+run_both EVAL "rawset(_G,'x',1)" 0
+run_both EVAL "local _, e = pcall(rawset, _G, 'x', 1) return e" 0
+run_both EVAL "KEYS[1]='x' return KEYS[1]" 1 k
+
 # kill_clean: $1=port $2=side-out : 后台 EVAL 死循环，重试 KILL 直到 OK（收敛掉
 # EVAL 注册前的 NOTBUSY 空窗），只记录终态 KILL 回复 + EVAL 侧输出
 kill_clean() {

@@ -363,3 +363,76 @@ func Test_Lua_when_ZeroTimeoutUnlimited(t *testing.T) {
 	r, c := openLuaSetupWithTimeout(t, 0)
 	require.Equal(t, intVal(1), dispatchLua(r, c, "EVAL", "return 1", "0"))
 }
+
+// WM: 沙箱读拦截（未声明全局）+ 已声明放行
+func Test_Lua_when_SandboxRead(t *testing.T) {
+	r, c := openLuaSetup(t)
+	got := dispatchLua(r, c, "EVAL", "return foo", "0")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "Script attempted to access nonexistent global variable 'foo'")
+	require.Contains(t, got.S, "script: ")
+	got = dispatchLua(r, c, "EVAL", "return _G.qqq", "0")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "'qqq'")
+	require.Equal(t, protocol.BulkOf("1"), dispatchLua(r, c, "EVAL", "return tostring(1)", "0"))
+	require.Equal(t, intVal(1), dispatchLua(r, c, "EVAL", "return _G ~= nil", "0"))
+	require.Equal(t, intVal(1), dispatchLua(r, c, "EVAL", "return string.foo == nil", "0"))
+	require.Equal(t, intVal(1), dispatchLua(r, c, "EVAL", "return cjson ~= nil", "0"))
+}
+
+// WM: 沙箱写拦截（全局/库表/函数定义）+ KEYS/ARGV 放行
+func Test_Lua_when_SandboxWrite(t *testing.T) {
+	r, c := openLuaSetup(t)
+	for _, body := range []string{
+		"foo = 1", "tostring = 1", "redis = nil", "_G.foo = 1",
+		"function f() end", "string.foo = 1", "redis.call = 1",
+	} {
+		got := dispatchLua(r, c, "EVAL", body, "0")
+		require.Equal(t, protocol.KindError, got.Kind, body)
+		require.Contains(t, got.S, "user_script:1: Attempt to modify a readonly table", body)
+	}
+	require.Equal(t, protocol.BulkOf("x"),
+		dispatchLua(r, c, "EVAL", "KEYS[1]='x' return KEYS[1]", "1", "k"))
+	got := dispatchLua(r, c, "EVAL", "local f = function() tostring = 1 end return {pcall(f)}", "0")
+	require.Equal(t, protocol.KindArray, got.Kind)
+}
+
+// WM: raw 绕过（_G 上无位置 readonly）+ 用户表委托
+func Test_Lua_when_SandboxRaw(t *testing.T) {
+	r, c := openLuaSetup(t)
+	got := dispatchLua(r, c, "EVAL", "rawset(_G,'x',1)", "0")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "Attempt to modify a readonly table")
+	require.NotContains(t, got.S, "user_script:1:")
+	require.Contains(t, got.S, "script: ")
+	require.Equal(t, protocol.BulkOf("Attempt to modify a readonly table"),
+		dispatchLua(r, c, "EVAL", "local _, e = pcall(rawset, _G, 'x', 1) return e", "0"))
+	require.Equal(t, protocol.BulkOf("Attempt to modify a readonly table"),
+		dispatchLua(r, c, "EVAL", "local _, e = pcall(setmetatable, _G, {}) return e", "0"))
+	require.Equal(t, protocol.Value{Kind: protocol.KindBulkString},
+		dispatchLua(r, c, "EVAL", "return rawget(_G,'qqq')", "0"))
+	require.Equal(t, intVal(7), dispatchLua(r, c,
+		"EVAL", "local t = {} setmetatable(t, {__index = function() return 7 end}) return t.x", "0"))
+	require.Equal(t, intVal(0), dispatchLua(r, c, "EVAL", "return #(getmetatable(_G))", "0"))
+}
+
+// WM: 全局集合（剥离/保留）+ load 阉割
+func Test_Lua_when_SandboxGlobals(t *testing.T) {
+	r, c := openLuaSetup(t)
+	for _, name := range []string{"print", "os", "require", "io", "debug", "package"} {
+		got := dispatchLua(r, c, "EVAL", "return "+name, "0")
+		require.Equal(t, protocol.KindError, got.Kind, name)
+		require.Contains(t, got.S, "nonexistent global variable '"+name+"'", name)
+	}
+	require.Equal(t, protocol.BulkOf("Lua 5.1"), dispatchLua(r, c, "EVAL", "return _VERSION", "0"))
+	require.Equal(t, protocol.BulkOf("function"), dispatchLua(r, c, "EVAL", "return type(loadstring)", "0"))
+	require.Equal(t, protocol.BulkOf("function"), dispatchLua(r, c, "EVAL", "return type(newproxy)", "0"))
+	require.Equal(t, protocol.BulkOf("function"), dispatchLua(r, c, "EVAL", "return type(gcinfo)", "0"))
+	require.Equal(t, intVal(42), dispatchLua(r, c, "EVAL", "return loadstring('return 42')()", "0"))
+	got := dispatchLua(r, c, "EVAL", "return load('return 1')", "0")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "bad argument #1 to 'load' (function expected, got string)")
+	require.Equal(t, intVal(9), dispatchLua(r, c,
+		"EVAL", "local i = 0 local r = function() i = i + 1 if i == 1 then return 'return 9' end end return load(r)()", "0"))
+	require.Equal(t, intVal(1), dispatchLua(r, c, "EVAL", "local t = 1 return t", "0"))
+}
