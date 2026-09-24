@@ -6,7 +6,7 @@
 |------|------------|
 | **Gedis** | 基于 Pebble 的 Redis 兼容存储引擎，用 Go 实现 |
 | **Redis 兼容（目标）** | 完全兼容 Redis 协议和命令，可作为 drop-in 替换（验收以 `redis-cli` + 官方命令行为为准） |
-| **已兼容子集（现状）** | v1 已实现：String, Hash, List, Set（含 TTL/HEXPIRE、PSYNC 主从、LRU、INFO/SLOWLOG/Prometheus）；M1 已交付：ZSet 全量（含 LEX/STORE/阻塞）+ Geo 套壳 + Bitmap 全量 + HLL 全量（dense-only）+ SCAN/TYPE 补齐；M2 已交付：Stream 全量（含消费组/PEL/阻塞读）；未实现：事务/Lua、Pub/Sub、Cluster/Sentinel |
+| **已兼容子集（现状）** | v1 已实现：String, Hash, List, Set（含 TTL/HEXPIRE、PSYNC 主从、LRU、INFO/SLOWLOG/Prometheus）；M1 已交付：ZSet 全量（含 LEX/STORE/阻塞）+ Geo 套壳 + Bitmap 全量 + HLL 全量（dense-only）+ SCAN/TYPE 补齐；M2 已交付：Stream 全量（含消费组/PEL/阻塞读）；M4 已交付：事务（MULTI/EXEC/WATCH）；M5 已交付：Pub/Sub（含 pattern 订阅）；M6 已交付：Lua（EVAL/EVALSHA/SCRIPT + cjson + SCRIPT KILL + 超时可配 + 脚本内禁用命令 + 编译措辞对齐 + 沙箱只读化）；未实现：Cluster/Sentinel、Lua 新功能库（bit/cmsgpack/struct）、cjson 配置函数 |
 | **存储引擎** | Pebble（纯 Go LSM-tree），提供持久化、高吞吐的键值存储 |
 | **数据结构** | Redis 支持的数据类型：String, Hash, List, Set, Sorted Set 等 |
 | **RESP 协议** | Redis Serialization Protocol，支持 RESP2 和 RESP3 两个版本 |
