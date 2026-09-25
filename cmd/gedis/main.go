@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/kennethfan/gedis/internal/commands"
+	"github.com/kennethfan/gedis/internal/cluster"
 	"github.com/kennethfan/gedis/internal/config"
 	"github.com/kennethfan/gedis/internal/metrics"
 	"github.com/kennethfan/gedis/internal/network"
@@ -78,6 +79,7 @@ func run() error {
 		}()
 	}
 	commands.RegisterStrings(router, store)
+
 	commands.RegisterHash(router, store)
 	commands.RegisterList(router, store, stats)
 	commands.RegisterSet(router, store)
@@ -98,9 +100,26 @@ func run() error {
 		return fmt.Errorf("invalid lua.time_limit: %w", err)
 	}
 	commands.RegisterLua(router, luaTimeout)
+	var clusterTopo *cluster.Topology
+	if cfg.Cluster.Enabled {
+		specs, err := cfg.Cluster.Specs()
+		if err != nil {
+			return fmt.Errorf("invalid cluster.nodes: %w", err)
+		}
+		selfAddr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
+		clusterTopo, err = cluster.Build(selfAddr, specs)
+		if err != nil {
+			return fmt.Errorf("invalid cluster topology: %w", err)
+		}
+		slog.Info("cluster mode enabled", "self", clusterTopo.SelfAddr(), "nodes", len(clusterTopo.Nodes()))
+	}
+	askingReg := commands.NewAskRegistry()
+	clusterH := commands.RegisterCluster(router, store, clusterTopo, askingReg)
+	txnReg.PreExec = clusterH.CheckExec
 	srv.OnConnClose(func(c net.Conn) {
 		txnReg.ConnClosed(c)
 		pubsubReg.ConnClosed(c)
+		askingReg.ConnClosed(c)
 	})
 	exp := commands.NewExpirer(store, stats)
 	exp.Start()

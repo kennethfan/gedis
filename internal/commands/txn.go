@@ -23,6 +23,9 @@ type TxnRegistry struct {
 	execMu   sync.Mutex
 	router   *network.Router
 	hub      *replication.Hub
+	// PreExec 在 EXEC 回放前运行：返回非 nil 即中止并以该 reply 应答。
+	// 集群模式挂 CROSSSLOT/MOVED 预扫；nil 表示无预检。
+	PreExec func(ctx context.Context, queue []protocol.Value) *protocol.Value
 }
 
 type txnSession struct {
@@ -178,6 +181,11 @@ func (reg *TxnRegistry) handleExec(ctx context.Context, _ []protocol.Value) prot
 	reg.mu.Unlock()
 	if dirty {
 		return errValueStr("EXECABORT Transaction discarded because of previous errors.")
+	}
+	if reg.PreExec != nil {
+		if reply := reg.PreExec(ctx, queue); reply != nil {
+			return *reply
+		}
 	}
 	reg.execMu.Lock()
 	defer reg.execMu.Unlock()
