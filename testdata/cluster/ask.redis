@@ -1,0 +1,35 @@
+# Fixture: ASK redirection (migrating slot 12182: 7002 -> 7000)
+# Key: foo (migrated 7002 -> 7000 via MIGRATE 127.0.0.1 7000 foo 0 5000)
+# Exact RESP bytes:
+#   source GET (no key locally): -ASK 12182 127.0.0.1:7000
+
+#   target GET without ASKING: -MOVED 12182 127.0.0.1:7002
+ (falls back to MOVED!)
+#   ASKING -> +OK, then same-connection GET -> $3 bar
+
+### 1. Setup (slot 12182 into migration)
+$ redis-cli -p 7002 CLUSTER SETSLOT 12182 MIGRATING <id-7000>  -> OK
+$ redis-cli -p 7000 CLUSTER SETSLOT 12182 IMPORTING <id-7002> -> OK
+$ redis-cli -p 7002 MIGRATE 127.0.0.1 7000 foo 0 5000         -> OK
+
+### 2. Source no longer has key -> ASK (NOT MOVED)
+$ redis-cli -p 7002 GET foo
+ASK 12182 127.0.0.1:7000
+
+
+### 3. Target without ASKING -> MOVED back to owner (client must send ASKING first)
+$ redis-cli -p 7000 GET foo
+MOVED 12182 127.0.0.1:7002
+
+
+### 4. Target with ASKING on SAME connection -> served
+(raw TCP) ASKING -> +OK ; GET foo -> $3 bar   [verified 2026-09-25]
+
+### 5. Key location oracles
+$ redis-cli -p 7002 CLUSTER GETKEYSINSLOT 12182 10  -> (empty, key left)
+$ redis-cli -p 7000 CLUSTER GETKEYSINSLOT 12182 10
+foo
+
+### 6. NODES migration markers
+importing side (7000 view): [12182-<-<id-7002>] suffix on slot range
+migrating side (7002 view): [12182->-<id-7000>] suffix on slot range

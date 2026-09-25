@@ -1,0 +1,35 @@
+# Fixture: CLUSTER SLOTS output shape
+# Produced: redis-cli -p 7000 CLUSTER SLOTS
+# Redis: 7.2.6 native cluster, 3 masters (7000:0-5460 7001:5461-10922 7002:10923-16383) + 3 replicas (7003/7004/7005)
+# Note: node IDs/IPs are instance-specific; ARRAY SHAPE (start end masterields replicas...) is the oracle.
+
+0
+5460
+127.0.0.1
+7000
+ef7c594c4b15926b7197157c06748c47e81e7fe0
+
+127.0.0.1
+7005
+3caf918eee089a2854b92d499dd1be792cfe04ca
+
+5461
+10922
+127.0.0.1
+7001
+001c65d4abf456503f9d8de77681b0b153c1e06f
+
+127.0.0.1
+7003
+8ed4b66f37cd17df233e6665953b378f48eae284
+
+10923
+16383
+127.0.0.1
+7002
+de981266fd45ae5fae42238bc5cd86f0da370e9a
+
+127.0.0.1
+7004
+ecfb03e60cf3df64f40d062b9c918c9052d51d71
+

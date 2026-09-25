@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/kennethfan/gedis/internal/cluster"
 )
 
 // ErrNotFound is returned when the config file does not exist.
@@ -22,6 +23,7 @@ type Config struct {
 	Persistence Persistence `toml:"persistence"`
 	Metrics     Metrics     `toml:"metrics"`
 	Lua         Lua         `toml:"lua"`
+	Cluster     Cluster     `toml:"cluster"`
 }
 
 // Server holds listener settings.
@@ -80,6 +82,34 @@ func (l Lua) EffectiveTimeLimit() (time.Duration, error) {
 		return 0, fmt.Errorf("lua.time_limit %d overflows time.Duration", ms)
 	}
 	return time.Duration(ms) * time.Millisecond, nil
+}
+
+// Cluster holds 静态集群拓扑配置（#40）：缺席即关闭；enabled 且无 nodes
+// 即本节点持有全部分片。
+type Cluster struct {
+	Enabled bool          `toml:"enabled"`
+	Nodes   []ClusterNode `toml:"nodes"`
+}
+
+// ClusterNode 是 [[cluster.nodes]] 表：slots 为混合段记法（"0-5460"/"7001"）。
+// id 缺席时由 addr 稳定派生（cluster.DeriveID）。
+type ClusterNode struct {
+	ID    string   `toml:"id"`
+	Addr  string   `toml:"addr"`
+	Slots []string `toml:"slots"`
+}
+
+// Specs 展开全部节点 slots 为 cluster.NodeSpec（fail-fast，返回首错）。
+func (c Cluster) Specs() ([]cluster.NodeSpec, error) {
+	var out []cluster.NodeSpec
+	for _, n := range c.Nodes {
+		ranges, err := cluster.ParseSlotRanges(n.Slots)
+		if err != nil {
+			return nil, fmt.Errorf("node %q: %w", n.Addr, err)
+		}
+		out = append(out, cluster.NodeSpec{ID: n.ID, Addr: n.Addr, Ranges: ranges})
+	}
+	return out, nil
 }
 
 // Load parses the TOML file at path into a Config.

@@ -1,0 +1,18 @@
+# Fixture: MOVED redirection (stable slot, wrong node)
+# Key: foo -> slot 12182 (owner 127.0.0.1:7002)
+# Exact RESP error bytes (raw TCP, inline GET): -MOVED 12182 127.0.0.1:7002
+
+
+### 1. Wrong-node access WITHOUT -c (client must redirect itself)
+$ redis-cli -p 7000 GET foo
+MOVED 12182 127.0.0.1:7002
+
+
+### 2. Write to wrong node is also rejected
+$ redis-cli -p 7000 SET foo xxx
+MOVED 12182 127.0.0.1:7002
+
+
+### 3. Same access WITH -c (client follows redirect automatically)
+$ redis-cli -c -p 7000 GET foo
+bar
