@@ -6,13 +6,25 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
 // RegisterStream 注册 Stream 基础命令；XREAD/修剪/元信息由同包其它文件追加。
+var streamMeta = []acl.Meta{
+	{Name: "XADD", Category: "stream", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "XLEN", Category: "stream", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "XRANGE", Category: "stream", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "XREVRANGE", Category: "stream", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "XDEL", Category: "stream", Keys: acl.KeySpec{First: 0, Last: 0}},
+}
+
 func RegisterStream(r *network.Router, kv KV, stats *network.Stats) {
+	for _, m := range streamMeta {
+		acl.RegisterMeta(m)
+	}
 	h := &streamHandler{kv: kv, stats: stats}
 	r.Register("XADD", h.xadd)
 	r.Register("XLEN", h.xlen)

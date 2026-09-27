@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
@@ -18,7 +19,19 @@ const (
 	geoSortDesc = 2
 )
 
+var geoSearchMeta = []acl.Meta{
+	{Name: "GEOSEARCH", Category: "geo", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "GEOSEARCHSTORE", Category: "geo", Keys: acl.KeySpec{Custom: acl.DstSrc}},
+	{Name: "GEORADIUS", Category: "geo", Keys: acl.KeySpec{Custom: acl.GeoRadiusKeys}},
+	{Name: "GEORADIUS_RO", Category: "geo", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "GEORADIUSBYMEMBER", Category: "geo", Keys: acl.KeySpec{Custom: acl.GeoRadiusKeys}},
+	{Name: "GEORADIUSBYMEMBER_RO", Category: "geo", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+}
+
 func (h *geoHandler) registerSearch(r *network.Router) {
+	for _, m := range geoSearchMeta {
+		acl.RegisterMeta(m)
+	}
 	r.Register("GEOSEARCH", h.geosearch)
 	r.Register("GEOSEARCHSTORE", h.geosearchstore)
 	r.Register("GEORADIUS", h.georadius)

@@ -6,13 +6,24 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
 // RegisterGeneric 注册通用 key 命令 COPY/RENAME/RENAMENX 与 SORT。
+var genericMeta = []acl.Meta{
+	{Name: "COPY", Category: "keyspace", Keys: acl.KeySpec{First: 0, Last: 1}},
+	{Name: "RENAME", Category: "keyspace", Keys: acl.KeySpec{First: 0, Last: 1}},
+	{Name: "RENAMENX", Category: "keyspace", Keys: acl.KeySpec{First: 0, Last: 1}},
+	{Name: "SORT", Category: "keyspace", Keys: acl.KeySpec{Custom: acl.SortStoreKey}},
+}
+
 func RegisterGeneric(r *network.Router, kv KV) {
+	for _, m := range genericMeta {
+		acl.RegisterMeta(m)
+	}
 	h := &genericHandler{kv: kv}
 	r.Register("COPY", h.copy)
 	r.Register("RENAME", h.renamePlain)

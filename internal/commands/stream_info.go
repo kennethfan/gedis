@@ -7,12 +7,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
+var streamInfoMeta = []acl.Meta{
+	{Name: "XINFO", Category: "stream", ReadOnly: true, Keys: acl.KeySpec{Custom: acl.SubKeyAt1}},
+	{Name: "XGROUP", Category: "stream", Keys: acl.KeySpec{Custom: acl.SubKeyAt1}},
+}
+
 func (h *streamHandler) registerInfo(r *network.Router) {
+	for _, m := range streamInfoMeta {
+		acl.RegisterMeta(m)
+	}
 	r.Register("XINFO", h.xinfo)
 	r.Register("XGROUP", h.xgroup)
 }

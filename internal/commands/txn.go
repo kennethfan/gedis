@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 	"github.com/kennethfan/gedis/internal/replication"
@@ -44,7 +45,18 @@ func CtxWithTxnReplay(ctx context.Context) context.Context {
 }
 
 // RegisterTxn 注册 MULTI/EXEC/DISCARD/WATCH/UNWATCH 并挂载排队拦截；返回 registry 由调用方接断开清理。
+var txnMeta = []acl.Meta{
+	{Name: "MULTI", Category: "transaction", Keys: acl.KeySpec{First: -1}},
+	{Name: "EXEC", Category: "transaction", Keys: acl.KeySpec{First: -1}},
+	{Name: "DISCARD", Category: "transaction", Keys: acl.KeySpec{First: -1}},
+	{Name: "WATCH", Category: "transaction", Keys: acl.KeySpec{First: 0, Last: -1}},
+	{Name: "UNWATCH", Category: "transaction", Keys: acl.KeySpec{First: -1}},
+}
+
 func RegisterTxn(r *network.Router, hub *replication.Hub) *TxnRegistry {
+	for _, m := range txnMeta {
+		acl.RegisterMeta(m)
+	}
 	reg := &TxnRegistry{sessions: make(map[net.Conn]*txnSession), router: r, hub: hub}
 	r.Register("MULTI", reg.handleMulti)
 	r.Register("EXEC", reg.handleExec)

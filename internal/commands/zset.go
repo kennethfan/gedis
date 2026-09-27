@@ -7,13 +7,31 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
 // RegisterZSet 注册 ZSet 核心命令；范围/STORE/阻塞/SCAN 由同包其它文件追加。
+var zsetMeta = []acl.Meta{
+	{Name: "ZADD", Category: "sortedset", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "ZREM", Category: "sortedset", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "ZSCORE", Category: "sortedset", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "ZMSCORE", Category: "sortedset", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "ZCARD", Category: "sortedset", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "ZINCRBY", Category: "sortedset", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "ZRANK", Category: "sortedset", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "ZREVRANK", Category: "sortedset", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "ZCOUNT", Category: "sortedset", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "ZPOPMIN", Category: "sortedset", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "ZPOPMAX", Category: "sortedset", Keys: acl.KeySpec{First: 0, Last: 0}},
+}
+
 func RegisterZSet(r *network.Router, kv KV) {
+	for _, m := range zsetMeta {
+		acl.RegisterMeta(m)
+	}
 	h := &zsetHandler{kv: kv}
 	r.Register("ZADD", h.zadd)
 	r.Register("ZREM", h.zrem)

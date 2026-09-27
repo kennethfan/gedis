@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
@@ -20,7 +21,16 @@ const gedisVersion = "0.1.0"
 
 // RegisterMonitor 注册 INFO 与 SLOWLOG；stats 为 nil 时计数类字段为零值。
 // hub 为 nil 时 replication 小节取 Stats 快照（单测场景）。
+var monitorMeta = []acl.Meta{
+	{Name: "INFO", Category: "dangerous", ReadOnly: true, Keys: acl.KeySpec{First: -1}},
+	{Name: "SLOWLOG", Category: "admin", Keys: acl.KeySpec{First: -1}},
+	{Name: "CONFIG", Category: "admin", Keys: acl.KeySpec{First: -1}},
+}
+
 func RegisterMonitor(r *network.Router, kv KV, stats *network.Stats, hub *replication.Hub) {
+	for _, m := range monitorMeta {
+		acl.RegisterMeta(m)
+	}
 	h := &monitorHandler{kv: kv, stats: stats, hub: hub}
 	r.Register("INFO", h.info)
 	r.Register("SLOWLOG", h.slowlog)

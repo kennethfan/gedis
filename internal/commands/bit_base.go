@@ -5,13 +5,22 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
 // RegisterBitmap 注册 Bitmap 命令；复用 s: 前缀的 string 字节，bit 视图与 string 视图同体。
+var bitmapBaseMeta = []acl.Meta{
+	{Name: "SETBIT", Category: "bitmap", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "GETBIT", Category: "bitmap", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+}
+
 func RegisterBitmap(r *network.Router, kv KV) {
+	for _, m := range bitmapBaseMeta {
+		acl.RegisterMeta(m)
+	}
 	h := &bitmapHandler{kv: kv}
 	r.Register("SETBIT", h.setbit)
 	r.Register("GETBIT", h.getbit)

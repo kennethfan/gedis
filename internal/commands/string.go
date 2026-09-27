@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
@@ -23,7 +24,20 @@ type KV interface {
 }
 
 // RegisterStrings 注册全部 string 与通用 key 命令。
+var stringMeta = []acl.Meta{
+	{Name: "SET", Category: "string", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "GET", Category: "string", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "GETDEL", Category: "string", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "GETEX", Category: "string", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "DEL", Category: "keyspace", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "UNLINK", Category: "keyspace", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "TTL", Category: "keyspace", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+}
+
 func RegisterStrings(r *network.Router, kv KV) {
+	for _, m := range stringMeta {
+		acl.RegisterMeta(m)
+	}
 	h := &stringHandler{kv: kv}
 	r.Register("SET", h.set)
 	r.Register("GET", h.get)

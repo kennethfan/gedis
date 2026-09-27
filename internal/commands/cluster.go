@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/cluster"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
@@ -72,7 +73,15 @@ func (a *AskRegistry) Consume(ctx context.Context) bool {
 
 // RegisterCluster 注册 CLUSTER（常驻）/ ASKING（仅 enabled）并挂载重定向 intercept。
 // topo 为 nil 视为集群关闭。返回 handler 供 main.go 挂 TxnRegistry.PreExec。
+var clusterMeta = []acl.Meta{
+	{Name: "CLUSTER", Category: "admin", Keys: acl.KeySpec{First: -1}},
+	{Name: "ASKING", Category: "admin", Keys: acl.KeySpec{First: -1}},
+}
+
 func RegisterCluster(r *network.Router, kv KV, topo *cluster.Topology, asking *AskRegistry) *clusterHandler {
+	for _, m := range clusterMeta {
+		acl.RegisterMeta(m)
+	}
 	c := &clusterHandler{kv: kv, topo: topo, askReg: asking}
 	r.Register("CLUSTER", c.cluster)
 	if c.enabled() {

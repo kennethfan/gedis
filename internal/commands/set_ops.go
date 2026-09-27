@@ -6,12 +6,26 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
+var setOpsMeta = []acl.Meta{
+	{Name: "SINTER", Category: "set", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: -1}},
+	{Name: "SINTERSTORE", Category: "set", Keys: acl.KeySpec{First: 0, Last: -1}},
+	{Name: "SUNION", Category: "set", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: -1}},
+	{Name: "SUNIONSTORE", Category: "set", Keys: acl.KeySpec{First: 0, Last: -1}},
+	{Name: "SDIFF", Category: "set", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: -1}},
+	{Name: "SDIFFSTORE", Category: "set", Keys: acl.KeySpec{First: 0, Last: -1}},
+	{Name: "SSCAN", Category: "set", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+}
+
 func (h *setHandler) registerOps(r *network.Router) {
+	for _, m := range setOpsMeta {
+		acl.RegisterMeta(m)
+	}
 	r.Register("SINTER", h.sinter)
 	r.Register("SINTERSTORE", h.sinterstore)
 	r.Register("SUNION", h.sunion)
