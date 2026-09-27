@@ -124,10 +124,10 @@ func structParse(L *lua.LState, fname, f string, strict bool) ([]structItem, boo
 			if j > i+1 {
 				n, _ = strconv.Atoi(f[i+1 : j])
 			}
-		if n == 0 || n&(n-1) != 0 {
-			libErrorf(L, "alignment %d is not a power of 2", n)
-			return nil, false, false
-		}
+			if n == 0 || n&(n-1) != 0 {
+				libErrorf(L, "alignment %d is not a power of 2", n)
+				return nil, false, false
+			}
 			maxalign = n
 			i = j
 		case ch >= '0' && ch <= '9':
@@ -222,11 +222,11 @@ func structPack(L *lua.LState) int {
 			if !ok {
 				return 0
 			}
-		if len(s) < it.size && !it.c0 {
-			// 真机 off-by-one：短串报错位为值参数位 +1
-			libArgError(L, "pack", arg+1, "string too short")
-			return 0
-		}
+			if len(s) < it.size && !it.c0 {
+				// 真机 off-by-one：短串报错位为值参数位 +1
+				libArgError(L, "pack", arg+1, "string too short")
+				return 0
+			}
 			arg++
 			if it.c0 {
 				out = append(out, s...)

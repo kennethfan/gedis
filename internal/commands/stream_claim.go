@@ -185,8 +185,8 @@ func (h *streamHandler) xpending(ctx context.Context, args []protocol.Value) pro
 		out = append(out, protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
 			protocol.BulkOf(p.ID.String()),
 			protocol.BulkOf(p.Consumer),
-			protocol.Value{Kind: protocol.KindInteger, I: idle},
-			protocol.Value{Kind: protocol.KindInteger, I: int64(p.Count)},
+			{Kind: protocol.KindInteger, I: idle},
+			{Kind: protocol.KindInteger, I: int64(p.Count)},
 		}})
 	}
 	return protocol.Value{Kind: protocol.KindArray, Elems: out}
@@ -236,12 +236,12 @@ func pendingSummary(g *datastruct.StreamGroup) protocol.Value {
 	for _, n := range names {
 		owners = append(owners, protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
 			protocol.BulkOf(n),
-			protocol.Value{Kind: protocol.KindInteger, I: counts[n]},
+			{Kind: protocol.KindInteger, I: counts[n]},
 		}})
 	}
 	return protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
-		protocol.Value{Kind: protocol.KindInteger, I: int64(len(g.PEL))},
+		{Kind: protocol.KindInteger, I: int64(len(g.PEL))},
 		minV, maxV,
-		protocol.Value{Kind: protocol.KindArray, Elems: owners},
+		{Kind: protocol.KindArray, Elems: owners},
 	}}
 }

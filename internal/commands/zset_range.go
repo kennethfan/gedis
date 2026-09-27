@@ -124,12 +124,13 @@ func lexRangeMembers(sorted []zsetMember, min, max lexBound, rev bool) []zsetMem
 	}
 	return out
 }
+
 type rangeQuery struct {
 	byScore, byLex, rev, withScores bool
 	start, stop                     int64
 	hasRank                         bool
 	min, max                        string
-	limitOffset, limitCount          int64
+	limitOffset, limitCount         int64
 	hasLimit                        bool
 }
 

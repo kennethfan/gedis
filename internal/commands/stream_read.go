@@ -195,7 +195,7 @@ func (h *streamHandler) tryRead(ctx context.Context, reqs []streamReadReq, count
 		}
 		out = append(out, protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
 			protocol.BulkOf(q.key),
-			protocol.Value{Kind: protocol.KindArray, Elems: entries},
+			{Kind: protocol.KindArray, Elems: entries},
 		}})
 	}
 	if out == nil {
@@ -211,6 +211,6 @@ func streamEntryValue(e datastruct.StreamEntry) protocol.Value {
 	}
 	return protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
 		protocol.BulkOf(e.ID.String()),
-		protocol.Value{Kind: protocol.KindArray, Elems: fv},
+		{Kind: protocol.KindArray, Elems: fv},
 	}}
 }

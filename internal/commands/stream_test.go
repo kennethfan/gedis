@@ -18,7 +18,7 @@ func bulk(ss ...string) []protocol.Value {
 func entryVal(id string, fields ...string) protocol.Value {
 	return protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
 		protocol.BulkOf(id),
-		protocol.Value{Kind: protocol.KindArray, Elems: bulk(fields...)},
+		{Kind: protocol.KindArray, Elems: bulk(fields...)},
 	}}
 }
 

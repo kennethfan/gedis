@@ -89,8 +89,10 @@ func Test_Lua_when_CallVsPcallError(t *testing.T) {
 	script := "return redis.call('INCR','k')"
 	sha := sha1Hex(script)
 	require.Equal(t,
-		protocol.Value{Kind: protocol.KindError,
-			S: "ERR value is not an integer or out of range script: " + sha + ", on @user_script:1."},
+		protocol.Value{
+			Kind: protocol.KindError,
+			S:    "ERR value is not an integer or out of range script: " + sha + ", on @user_script:1.",
+		},
 		dispatchLua(r, c, "EVAL", script, "0"))
 	require.Equal(t, protocol.BulkOf("ERR value is not an integer or out of range"),
 		dispatchLua(r, c, "EVAL", "local r=redis.pcall('INCR','k'); return r.err", "0"))
@@ -135,8 +137,10 @@ func Test_Lua_when_ScriptErrors(t *testing.T) {
 	script := "error('boom')"
 	sha := sha1Hex(script)
 	require.Equal(t,
-		protocol.Value{Kind: protocol.KindError,
-			S: "ERR user_script:1: boom script: " + sha + ", on @user_script:1."},
+		protocol.Value{
+			Kind: protocol.KindError,
+			S:    "ERR user_script:1: boom script: " + sha + ", on @user_script:1.",
+		},
 		dispatchLua(r, c, "EVAL", script, "0"))
 	got := dispatchLua(r, c, "EVAL", "return {{{", "0")
 	require.Equal(t, protocol.KindError, got.Kind)
@@ -147,8 +151,10 @@ func Test_Lua_when_ScriptErrors(t *testing.T) {
 func Test_Lua_when_CompileWording(t *testing.T) {
 	r, c := openLuaSetup(t)
 	want := func(script, detail string) protocol.Value {
-		return protocol.Value{Kind: protocol.KindError,
-			S: "ERR Error compiling script (new function): " + detail}
+		return protocol.Value{
+			Kind: protocol.KindError,
+			S:    "ERR Error compiling script (new function): " + detail,
+		}
 	}
 	cases := []struct{ script, detail string }{
 		{"return 0x", "user_script:1: malformed number near '0x'"},
@@ -172,16 +178,22 @@ func Test_Lua_when_CompileWording(t *testing.T) {
 // WM: numkeys 非法三件套 + argc 不足
 func Test_Lua_when_BadNumkeys(t *testing.T) {
 	r, c := openLuaSetup(t)
-	require.Equal(t, protocol.Value{Kind: protocol.KindError,
-		S: "ERR value is not an integer or out of range"},
+	require.Equal(t, protocol.Value{
+		Kind: protocol.KindError,
+		S:    "ERR value is not an integer or out of range",
+	},
 		dispatchLua(r, c, "EVAL", "return 1", "foo"))
 	require.Equal(t, protocol.Value{Kind: protocol.KindError, S: "ERR Number of keys can't be negative"},
 		dispatchLua(r, c, "EVAL", "return 1", "-1"))
-	require.Equal(t, protocol.Value{Kind: protocol.KindError,
-		S: "ERR Number of keys can't be greater than number of args"},
+	require.Equal(t, protocol.Value{
+		Kind: protocol.KindError,
+		S:    "ERR Number of keys can't be greater than number of args",
+	},
 		dispatchLua(r, c, "EVAL", "return 1", "5", "a"))
-	require.Equal(t, protocol.Value{Kind: protocol.KindError,
-		S: "ERR wrong number of arguments for 'eval' command"},
+	require.Equal(t, protocol.Value{
+		Kind: protocol.KindError,
+		S:    "ERR wrong number of arguments for 'eval' command",
+	},
 		dispatchLua(r, c, "EVAL", "return 1"))
 }
 
@@ -195,13 +207,17 @@ func Test_Lua_when_ScriptCache(t *testing.T) {
 		dispatchLua(r, c, "SCRIPT", "EXISTS", sha, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"))
 	require.Equal(t, protocol.Value{Kind: protocol.KindSimpleString, S: "OK"},
 		dispatchLua(r, c, "SCRIPT", "FLUSH"))
-	require.Equal(t, protocol.Value{Kind: protocol.KindError,
-		S: "NOSCRIPT No matching script. Please use EVAL."},
+	require.Equal(t, protocol.Value{
+		Kind: protocol.KindError,
+		S:    "NOSCRIPT No matching script. Please use EVAL.",
+	},
 		dispatchLua(r, c, "EVALSHA", sha, "0"))
 	require.Equal(t, intVal(1), dispatchLua(r, c, "EVAL", "return 2-1", "0"))
 	require.Equal(t, intVal(1), dispatchLua(r, c, "EVALSHA", sha1Hex("return 2-1"), "0"))
-	require.Equal(t, protocol.Value{Kind: protocol.KindError,
-		S: "ERR unknown subcommand 'NOSUCH'. Try SCRIPT HELP."},
+	require.Equal(t, protocol.Value{
+		Kind: protocol.KindError,
+		S:    "ERR unknown subcommand 'NOSUCH'. Try SCRIPT HELP.",
+	},
 		dispatchLua(r, c, "SCRIPT", "NOSUCH"))
 }
 
@@ -222,11 +238,15 @@ func Test_Lua_when_EvalInMulti(t *testing.T) {
 // WM: 无在飞脚本时 SCRIPT KILL 回 NOTBUSY；arity 按真机 script|kill 文案
 func Test_Lua_when_ScriptKillNotBusy(t *testing.T) {
 	r, c := openLuaSetup(t)
-	require.Equal(t, protocol.Value{Kind: protocol.KindError,
-		S: "NOTBUSY No scripts in execution right now."},
+	require.Equal(t, protocol.Value{
+		Kind: protocol.KindError,
+		S:    "NOTBUSY No scripts in execution right now.",
+	},
 		dispatchLua(r, c, "SCRIPT", "KILL"))
-	require.Equal(t, protocol.Value{Kind: protocol.KindError,
-		S: "ERR wrong number of arguments for 'script|kill' command"},
+	require.Equal(t, protocol.Value{
+		Kind: protocol.KindError,
+		S:    "ERR wrong number of arguments for 'script|kill' command",
+	},
 		dispatchLua(r, c, "SCRIPT", "KILL", "extra"))
 }
 
@@ -255,13 +275,17 @@ func Test_Lua_when_ScriptKillLoop(t *testing.T) {
 
 	select {
 	case got := <-done:
-		require.Equal(t, protocol.Value{Kind: protocol.KindError,
-			S: "ERR Script killed by user with SCRIPT KILL... script: " + sha + ", on @user_script:1."}, got)
+		require.Equal(t, protocol.Value{
+			Kind: protocol.KindError,
+			S:    "ERR Script killed by user with SCRIPT KILL... script: " + sha + ", on @user_script:1.",
+		}, got)
 	case <-time.After(10 * time.Second):
 		t.Fatal("killed EVAL did not return")
 	}
-	require.Equal(t, protocol.Value{Kind: protocol.KindError,
-		S: "NOTBUSY No scripts in execution right now."},
+	require.Equal(t, protocol.Value{
+		Kind: protocol.KindError,
+		S:    "NOTBUSY No scripts in execution right now.",
+	},
 		dispatchLua(r, srv2, "SCRIPT", "KILL"))
 	require.Equal(t, intVal(1), dispatchLua(r, c, "EVAL", "return 1", "0"))
 }

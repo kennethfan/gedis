@@ -163,6 +163,7 @@ func Test_Txn_when_MinArityPasses(t *testing.T) {
 	require.Equal(t, "OK", got.Elems[0].S)
 	require.Equal(t, protocol.BulkOf("av"), dispatch(r, "GET", "ak"))
 }
+
 // Given: MULTI 后排队对 string 键的 LPUSH（类型错误只能在回放期发现）
 // When: EXEC
 // Then: 错误落进结果数组对应位置，事务继续；后继命令照常执行
