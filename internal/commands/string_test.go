@@ -18,6 +18,7 @@ func openTestSetup(t testing.TB) (*network.Router, *storage.Pebble) {
 	t.Cleanup(func() { _ = store.Close() })
 	r := network.NewRouter()
 	RegisterStrings(r, store)
+	RegisterMigrate(r, store)
 	return r, store
 }
 
