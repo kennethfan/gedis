@@ -109,6 +109,7 @@ func run() error {
 	commands.RegisterGeo(router, store)
 	commands.RegisterScan(router, store)
 	commands.RegisterGeneric(router, store)
+	commands.RegisterDumpRestore(router, store)
 	commands.RegisterBitmap(router, store)
 	commands.RegisterHLL(router, store)
 	commands.RegisterStream(router, store, stats)
@@ -136,6 +137,7 @@ func run() error {
 		slog.Info("cluster mode enabled", "self", clusterTopo.SelfAddr(), "nodes", len(clusterTopo.Nodes()))
 	}
 	askingReg := commands.NewAskRegistry()
+	commands.RegisterMigrate(router, store)
 	clusterH := commands.RegisterCluster(router, store, clusterTopo, askingReg)
 	txnReg.PreExec = clusterH.CheckExec
 	if clusterTopo != nil && cfg.Storage.DataDir != "" {

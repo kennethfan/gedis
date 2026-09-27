@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"net"
 	"strconv"
 	"testing"
 
@@ -62,6 +63,39 @@ func Test_Intercept_when_MigratingKeyMissingAsks(t *testing.T) {
 	require.Equal(t, protocol.KindError, got.Kind)
 	require.Contains(t, got.S, "ASK ")
 	require.Contains(t, got.S, "127.0.0.1:7001")
+}
+
+// Given: 目标端槽 IMPORTING，同连接已 ASKING，本地无 key（RESTORE 前态）
+// When: 同连接 GET 该槽 key
+// Then: 放行（真机 importing+ASKING 不问 key 有无；缺 key 时 GET 回 nil）
+// 互证：真机 R2(IMPORTING) 上 ASKING+SET 可写；缺 key 拒绝 MOVED 会断掉 MIGRATE 的 RESTORE。
+func Test_Intercept_when_ImportingAskedAbsentKeyPasses(t *testing.T) {
+	r, _ := openClusterSetup(t, splitTopo(t, "127.0.0.1:7001"))
+	key := "impkey-probe"
+	slot := cluster.Slot(key)
+	require.True(t, slot < 5461 || slot > 10922, "probe key must hash outside nodeB ranges, got slot %d", slot)
+	require.NoError(t, dispatchSetSlot(r, slot, "IMPORTING", "nodeA"))
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+	require.Equal(t, "OK", dispatchConn(r, c1, "ASKING").S)
+	got := dispatchConn(r, c1, "GET", key)
+	require.Equal(t, protocol.KindBulkString, got.Kind)
+	require.Nil(t, got.Bulk)
+}
+
+// Given: 源端槽 MIGRATING，key 不存在
+// When: MIGRATE 该 key
+// Then: 放行给 handler 回 NOKEY（真机先查 key 存在性，不走 ASK；互证 redis.out MIGRATE=NOKEY）
+func Test_Intercept_when_MigratingMigrateAbsentKeyNoKey(t *testing.T) {
+	r, _ := openClusterSetup(t, splitTopo(t, "127.0.0.1:7000"))
+	key := "askkey-missing-xyz"
+	slot := cluster.Slot(key)
+	require.Less(t, slot, 5461)
+	require.NoError(t, dispatchSetSlot(r, slot, "MIGRATING", "nodeB"))
+	got := dispatch(r, "MIGRATE", "127.0.0.1", "7001", key, "0", "5000")
+	require.Equal(t, protocol.KindSimpleString, got.Kind)
+	require.Equal(t, "NOKEY", got.S)
 }
 
 // Given: 目标端槽残留 IMPORTING（源已 STABLE，无 ASKING）

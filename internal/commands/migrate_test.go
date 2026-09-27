@@ -23,6 +23,7 @@ type fakeRestoreServer struct {
 	mu            sync.Mutex
 	gotRestore    bool
 	requireAsking bool
+	askingFails   bool
 	existing      map[string]bool
 }
 
@@ -30,7 +31,8 @@ func startFakeRestoreServer(t testing.TB, existing []string) *fakeRestoreServer 
 	return startFakeRestoreServerWithAuth(t, existing, "")
 }
 
-func startFakeRestoreServerWithAuth(t testing.TB, existing []string, password string) *fakeRestoreServer {	t.Helper()
+func startFakeRestoreServerWithAuth(t testing.TB, existing []string, password string) *fakeRestoreServer {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	f := &fakeRestoreServer{
@@ -94,6 +96,13 @@ func (f *fakeRestoreServer) handle(c net.Conn) {
 		switch strings.ToUpper(string(v.Elems[0].Bulk)) {
 		case "ASKING":
 			asking = true
+			f.mu.Lock()
+			fail := f.askingFails
+			f.mu.Unlock()
+			if fail {
+				f.reply(c, "-ERR This instance has cluster support disabled\r\n")
+				continue
+			}
 			f.reply(c, "+OK\r\n")
 		case "AUTH":
 			ok := false
@@ -162,8 +171,8 @@ func Test_Migrate_when_NoKeyReportsNoKey(t *testing.T) {
 	r, _ := openTestSetup(t)
 	fake := startFakeRestoreServer(t, nil)
 	got := dispatch(r, "MIGRATE", "127.0.0.1", fake.Port, "mg-missing", "0", "1000")
-	require.Equal(t, protocol.KindError, got.Kind)
-	require.Contains(t, got.S, "NOKEY")
+	require.Equal(t, protocol.KindSimpleString, got.Kind)
+	require.Equal(t, "NOKEY", got.S)
 }
 
 func Test_Migrate_when_TargetExistsWithoutReplaceFails(t *testing.T) {
@@ -200,6 +209,24 @@ func Test_Migrate_when_TargetRequiresAskingSendsAskingFirst(t *testing.T) {
 	require.Equal(t, protocol.KindSimpleString, got.Kind)
 	require.Equal(t, "OK", got.S)
 	require.Nil(t, dispatch(r, "GET", "mg5").Bulk)
+	require.True(t, fake.restored())
+}
+
+// Given: 目标为无 cluster 能力的 standalone 实例（ASKING 被拒，
+// 如 real-redis 非集群模式回 ERR This instance has cluster support disabled）
+// When: MIGRATE 搬运存在的 key
+// Then: 仍继续 RESTORE 并返回 OK，源 key 被删除
+func Test_Migrate_when_AskingRejectedStillRestores(t *testing.T) {
+	r, _ := openTestSetup(t)
+	fake := startFakeRestoreServer(t, nil)
+	fake.mu.Lock()
+	fake.askingFails = true
+	fake.mu.Unlock()
+	require.Equal(t, "OK", dispatch(r, "SET", "mg6", "v6").S)
+	got := dispatch(r, "MIGRATE", "127.0.0.1", fake.Port, "mg6", "0", "1000")
+	require.Equal(t, protocol.KindSimpleString, got.Kind)
+	require.Equal(t, "OK", got.S)
+	require.Nil(t, dispatch(r, "GET", "mg6").Bulk)
 	require.True(t, fake.restored())
 }
 

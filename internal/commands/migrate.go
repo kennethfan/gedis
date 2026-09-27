@@ -108,7 +108,7 @@ func (h *migrateHandler) migrate(ctx context.Context, args []protocol.Value) pro
 	raw, e, err := lookupRaw(ctx, h.kv, o.key)
 	if err != nil {
 		if isNotFound(err) {
-			return errValueStr("NOKEY No such key")
+			return protocol.Value{Kind: protocol.KindSimpleString, S: "NOKEY"}
 		}
 		return errValue(err)
 	}
@@ -132,8 +132,8 @@ func (h *migrateHandler) migrate(ctx context.Context, args []protocol.Value) pro
 
 // sendRestore 建连目标并按序发 AUTH（若有）、ASKING 与 RESTORE key ttl
 // payload [REPLACE]；读目标回复，非 +OK 即错（BUSYKEY 原样回透）。
-// ASKING 必发：importing 态目标在同连接未见 ASKING 时拒收 RESTORE（回
-// MOVED），与原生 MIGRATE 先 ASKING 后 RESTORE 的线序一致。
+// ASKING 先于 RESTORE（与原生 MIGRATE 线序一致），但回复只做 best-effort
+// 消费：standalone 目标拒收 ASKING 时仍继续 RESTORE。
 func (o migrateOptions) sendRestore(payload []byte, ttl int64) error {
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort(o.host, o.port), o.timeout)
 	if err != nil {
@@ -171,15 +171,11 @@ func (o migrateOptions) sendRestore(payload []byte, ttl int64) error {
 	if err := send(protocol.ArrayOf(protocol.BulkOf("ASKING"))); err != nil {
 		return err
 	}
-	reply, err := protocol.Decode(rd)
-	if err != nil {
+	// ASKING 回复不做硬校验：无 cluster 能力的 standalone 目标会拒收
+	// ASKING（如 real-redis 非集群模式），此时仍继续 RESTORE；importing
+	// 态的 cluster 目标必回 +OK，已在同连接置位。
+	if _, err := protocol.Decode(rd); err != nil {
 		return fmt.Errorf("IOERR error or timeout reading from target instance")
-	}
-	if reply.Kind == protocol.KindError {
-		return fmt.Errorf("%s", reply.S)
-	}
-	if reply.Kind != protocol.KindSimpleString || reply.S != "OK" {
-		return fmt.Errorf("IOERR unexpected reply from target instance")
 	}
 	restore := []protocol.Value{
 		protocol.BulkOf("RESTORE"),
@@ -193,7 +189,7 @@ func (o migrateOptions) sendRestore(payload []byte, ttl int64) error {
 	if err := send(protocol.ArrayOf(restore...)); err != nil {
 		return err
 	}
-	reply, err = protocol.Decode(rd)
+	reply, err := protocol.Decode(rd)
 	if err != nil {
 		return fmt.Errorf("IOERR error or timeout reading from target instance")
 	}

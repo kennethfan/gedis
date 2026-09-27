@@ -18,6 +18,7 @@ func openClusterSetup(t testing.TB, topo *cluster.Topology) (*network.Router, *A
 	r, store := openTestSetup(t)
 	txnReg := RegisterTxn(r, nil)
 	asking := NewAskRegistry()
+	RegisterMigrate(r, store)
 	h := RegisterCluster(r, store, topo, asking)
 	txnReg.PreExec = h.CheckExec
 	return r, asking

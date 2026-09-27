@@ -526,13 +526,19 @@ func (c *clusterHandler) intercept(ctx context.Context, cmd protocol.Value) (pro
 		}
 	}
 	if targetID, ok := c.topo.MigratingTo(slot); ok {
+		// MIGRATE 自带存在性语义：缺 key 由 handler 回 NOKEY（对标真机先查 key），不走 ASK。
+		if name == "MIGRATE" {
+			return protocol.Value{}, false
+		}
 		if c.keyPresent(ctx, keys[0]) {
 			return protocol.Value{}, false
 		}
 		return errValueStr(fmt.Sprintf("ASK %d %s", slot, c.nodeAddrOr(targetID, c.topo.OwnerAddr(slot)))), true
 	}
 	if _, ok := c.topo.ImportingFrom(slot); ok {
-		if asked && c.keyPresent(ctx, keys[0]) {
+		// importing+ASKING：服务该槽一切命令，不问 key 有无（对标真机；MIGRATE 的
+		// RESTORE 到达时 key 必然尚不存在，问存在性会把迁移链路切断）。
+		if asked {
 			return protocol.Value{}, false
 		}
 		owner := c.topo.OwnerAddr(slot)
