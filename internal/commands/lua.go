@@ -40,6 +40,7 @@ import (
 //   - SCRIPT KILL：跨连接中止在飞脚本；无运行→NOTBUSY，已执行写命令→
 //     UNKILLABLE（dirty 规则经 7.2.6 探针：分发执行的写命令即脏，
 //     回复错误也算；未知命令/arity 等分发前拒绝不算脏）。
+//
 // v1 非目标：可调 lua-time-limit、阻塞命令限制、cmsgpack、
 // 从库脚本内写拦截（直调 handler 绕过 readonly 门，注释备案）。
 type LuaRegistry struct {
@@ -400,7 +401,7 @@ var gotoLabelRe = regexp.MustCompile(`no visible label '([^']*)' for <goto> at l
 //   - 非法 16 进制：`malformed number near '<字面量>'`，字面量按错误列在正文定位后
 //     向后吞 [0-9A-Za-z_.]（`0x`→`0x`，`0xG`→`0xG`）。
 //   - 未闭合串：行尾/EOF→`near '<eof>'`；跨行→行号回退到起始引号行，
-//     near 为原文照抄字面量套一层引号（`'abc`→`''abc'`）。
+//     near 为原文照抄字面量套一层引号（`'abc`→`”abc'`）。
 //   - 未闭合长注释：行号为正文末行，`unfinished long comment near '<eof>'`。
 func mapParseMessage(body string, line int, perr *parse.Error) (string, bool) {
 	switch perr.Message {

@@ -316,7 +316,7 @@ func (h *streamHandler) xautoclaim(ctx context.Context, args []protocol.Value) p
 	}
 	return protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
 		protocol.BulkOf(cursor.String()),
-		protocol.Value{Kind: protocol.KindArray, Elems: entries},
-		protocol.Value{Kind: protocol.KindArray, Elems: orphans},
+		{Kind: protocol.KindArray, Elems: entries},
+		{Kind: protocol.KindArray, Elems: orphans},
 	}}
 }

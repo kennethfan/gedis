@@ -95,7 +95,7 @@ func bitUnary(fname string) lua.LGFunction {
 			L.Push(lua.LNumber(^v))
 		case "bswap":
 			u := uint32(v)
-			swapped := (u&0xFF)<<24 | (u&0xFF00)<<8 | (u&0xFF0000)>>8 | (u>>24)
+			swapped := (u&0xFF)<<24 | (u&0xFF00)<<8 | (u&0xFF0000)>>8 | (u >> 24)
 			L.Push(lua.LNumber(int32(swapped)))
 		}
 		return 1

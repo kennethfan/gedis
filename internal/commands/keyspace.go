@@ -168,6 +168,7 @@ func allUserKeys(ctx context.Context, kv KV) ([]string, [][]byte, error) {
 	}
 	return names, raws, nil
 }
+
 func (s *stringHandler) keys(ctx context.Context, args []protocol.Value) protocol.Value {
 	if len(args) != 1 {
 		return errValueStr("ERR wrong number of arguments for 'keys' command")

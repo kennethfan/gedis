@@ -47,7 +47,7 @@ func Save(path string, st *Store) error {
 		sb.WriteByte('\n')
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(sb.String()), 0600); err != nil {
+	if err := os.WriteFile(tmp, []byte(sb.String()), 0o600); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, filepath.Clean(path)); err != nil {

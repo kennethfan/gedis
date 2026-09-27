@@ -11,7 +11,7 @@ import (
 func streamKeyVal(key string, entries ...protocol.Value) protocol.Value {
 	return protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
 		protocol.BulkOf(key),
-		protocol.Value{Kind: protocol.KindArray, Elems: entries},
+		{Kind: protocol.KindArray, Elems: entries},
 	}}
 }
 

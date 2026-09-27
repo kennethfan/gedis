@@ -104,14 +104,16 @@ func Test_Generic_when_Sort(t *testing.T) {
 
 	got := dispatch(r, "SORT", "items", "BY", "w_*", "GET", "o_*", "GET", "w_*")
 	require.Equal(t, protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
-		protocol.Value{Kind: protocol.KindBulkString}, protocol.BulkOf("3"),
+		{Kind: protocol.KindBulkString},
+		protocol.BulkOf("3"),
 		protocol.BulkOf("A1"), protocol.BulkOf("5"),
-		protocol.Value{Kind: protocol.KindBulkString}, protocol.BulkOf("9"),
+		{Kind: protocol.KindBulkString},
+		protocol.BulkOf("9"),
 	}}, got)
 
 	got = dispatch(r, "SORT", "items", "BY", "w_*", "GET", "uh_*->name")
 	require.Equal(t, protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
-		protocol.BulkOf("Bob"), protocol.BulkOf("Alice"), protocol.Value{Kind: protocol.KindBulkString},
+		protocol.BulkOf("Bob"), protocol.BulkOf("Alice"), {Kind: protocol.KindBulkString},
 	}}, got)
 
 	require.Equal(t, arr("a", "b", "c"), dispatch(r, "SORT", "items", "ALPHA", "GET", "#"))

@@ -247,7 +247,7 @@ func (h *streamHandler) rangeCmd(ctx context.Context, args []protocol.Value, rev
 		}
 		out = append(out, protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
 			protocol.BulkOf(e.ID.String()),
-			protocol.Value{Kind: protocol.KindArray, Elems: fv},
+			{Kind: protocol.KindArray, Elems: fv},
 		}})
 	}
 	if !reverse {

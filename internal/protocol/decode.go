@@ -272,6 +272,7 @@ func expectCRLF(r *bufio.Reader) error {
 	}
 	return nil
 }
+
 func readLine(r *bufio.Reader) (string, error) {
 	line, err := r.ReadString('\n')
 	if err != nil {
