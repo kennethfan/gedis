@@ -525,6 +525,22 @@ func (c *clusterHandler) intercept(ctx context.Context, cmd protocol.Value) (pro
 			return errValueStr("CROSSSLOT Keys in request don't hash to the same slot"), true
 		}
 	}
+	if targetID, ok := c.topo.MigratingTo(slot); ok {
+		if c.keyPresent(ctx, keys[0]) {
+			return protocol.Value{}, false
+		}
+		return errValueStr(fmt.Sprintf("ASK %d %s", slot, c.nodeAddrOr(targetID, c.topo.OwnerAddr(slot)))), true
+	}
+	if _, ok := c.topo.ImportingFrom(slot); ok {
+		if asked && c.keyPresent(ctx, keys[0]) {
+			return protocol.Value{}, false
+		}
+		owner := c.topo.OwnerAddr(slot)
+		if owner == "" {
+			return errValueStr("CLUSTERDOWN Hash slot not served by this node. Check your cluster configuration."), true
+		}
+		return errValueStr(fmt.Sprintf("MOVED %d %s", slot, owner)), true
+	}
 	if c.topo.Owns(slot) {
 		return protocol.Value{}, false
 	}
@@ -595,6 +611,15 @@ func (c *clusterHandler) keyPresent(ctx context.Context, key string) bool {
 	}
 	_, err := lookupKey(ctx, c.kv, key)
 	return err == nil
+}
+
+func (c *clusterHandler) nodeAddrOr(id, fallback string) string {
+	for _, n := range c.topo.Nodes() {
+		if n.ID == id {
+			return n.Addr
+		}
+	}
+	return fallback
 }
 
 // merged 合并连续区间（SLOTS 输出与真机一致：连续同主段只占一项）。
