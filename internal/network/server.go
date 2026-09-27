@@ -10,10 +10,19 @@ import (
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
+// UserProvider 是连接→用户名映射（commands.AuthRegistry 实现）；
+// 为 nil 时不注入身份（默认全开放路径零开销）。
+type UserProvider interface {
+	UserOf(c net.Conn) string
+}
+
 // Server TCP 服务端：accept 循环 + 每连接一个 goroutine，RESP 解码→Router 分发→编码回写。
 type Server struct {
 	router *Router
 	stats  *Stats
+
+	// UserProvider 由 main.go 在 RegisterAuth 后挂载（srv.UserProvider = reg）。
+	UserProvider UserProvider
 
 	mu     sync.Mutex
 	ln     net.Listener
@@ -107,6 +116,11 @@ func (s *Server) handle(conn net.Conn) {
 		cmd, err := protocol.Decode(rd)
 		if err != nil {
 			return
+		}
+		if up := s.UserProvider; up != nil {
+			if name := up.UserOf(conn); name != "" {
+				ctx = ContextWithUser(ctx, name)
+			}
 		}
 		reply := s.router.Dispatch(ctx, cmd)
 		if _, err := conn.Write(reply.Append(nil)); err != nil {

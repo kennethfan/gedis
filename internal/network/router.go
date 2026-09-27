@@ -17,6 +17,14 @@ type Handler func(ctx context.Context, args []protocol.Value) protocol.Value
 // 典型用途：MULTI 会话排队拦截（见 commands.RegisterTxn）。
 type InterceptFunc func(ctx context.Context, cmd protocol.Value) (reply protocol.Value, handled bool)
 
+// AuthorizerStore 是鉴权门消费的用户表最小接口，由 internal/acl.Store 实现。
+type AuthorizerStore interface {
+	CanRun(user, cmd string) bool
+	UserExists(user string) bool
+	HasRestrictedUsers() bool
+	DefaultRequiresAuth() bool
+}
+
 // Router 按命令名（大小写不敏感）分发，并发安全。
 // AttachStats 后对每次分发计数并记录慢查询；不挂载则零开销。
 type Router struct {
@@ -26,6 +34,7 @@ type Router struct {
 	readonly  bool
 	writeCmds map[string]bool
 	intercept InterceptFunc
+	auth      AuthorizerStore
 }
 
 func NewRouter() *Router {
@@ -70,6 +79,18 @@ func (r *Router) SetWriteCommands(cmds map[string]bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.writeCmds = cmds
+}
+
+// SetAuthorizer 挂载鉴权表；nil 表示关闭鉴权门。
+func (r *Router) SetAuthorizer(st AuthorizerStore) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.auth = st
+}
+
+// isAuthExempt 是未认证连接仍可执行的命令（AUTH/HELLO/QUIT）。
+func isAuthExempt(name string) bool {
+	return name == "AUTH" || name == "HELLO" || name == "QUIT"
 }
 
 // SetIntercept 设置分发前钩子（启动时调一次）；传 nil 卸载。
@@ -130,6 +151,7 @@ func (r *Router) Dispatch(ctx context.Context, cmd protocol.Value) protocol.Valu
 	stats := r.stats
 	readonly := r.readonly && r.writeCmds[name]
 	intercept := r.intercept
+	auth := r.auth
 	r.mu.RUnlock()
 	if intercept != nil {
 		if reply, handled := intercept(ctx, cmd); handled {
@@ -137,6 +159,28 @@ func (r *Router) Dispatch(ctx context.Context, cmd protocol.Value) protocol.Valu
 				stats.incCommands()
 			}
 			return reply
+		}
+	}
+	if auth != nil && auth.HasRestrictedUsers() && !isAuthExempt(name) {
+		user, ok := UserFromContext(ctx)
+		authed := ok && user != ""
+		if !authed {
+			user = "default"
+		}
+		if !authed && auth.DefaultRequiresAuth() {
+			if stats != nil {
+				stats.incCommands()
+			}
+			return errValue("NOAUTH Authentication required.")
+		}
+		if !auth.CanRun(user, name) {
+			if stats != nil {
+				stats.incCommands()
+			}
+			if user == "default" {
+				return errValue("NOPERM this user has no permissions to run the '" + strings.ToLower(name) + "' command")
+			}
+			return errValue("NOPERM User " + user + " has no permissions to run the '" + strings.ToLower(name) + "' command")
 		}
 	}
 	if !ok {

@@ -6,8 +6,10 @@ package commands
 // 新增命令必须同步加条目（Test_CommandArityCoversRouter 防腐）。
 func CommandArity() map[string]int {
 	return map[string]int{
+		"ACL":                  -2,
 		"APPEND":               3,
 		"ASKING":               1,
+		"AUTH":                 -2,
 		"BITCOUNT":             -2,
 		"BITFIELD":             -2,
 		"BITOP":                -4,

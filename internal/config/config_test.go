@@ -171,3 +171,22 @@ func Test_Config_Cluster_bad_slots_fail_fast(t *testing.T) {
 	_, err := c.Specs()
 	require.Error(t, err)
 }
+
+func Test_Config_ACLFields_parse(t *testing.T) {
+	toml := "requirepass = \"s3cret\"\naclfile = \"/tmp/users.acl\"\n[server]\nport = 1\n"
+	path := filepath.Join(t.TempDir(), "gedis.toml")
+	require.NoError(t, os.WriteFile(path, []byte(toml), 0o600))
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, "s3cret", cfg.RequirePass)
+	require.Equal(t, "/tmp/users.acl", cfg.ACLFile)
+}
+
+func Test_Config_ACLFields_absent_empty(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "gedis.toml")
+	require.NoError(t, os.WriteFile(path, []byte("[server]\nport = 1\n"), 0o600))
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.Empty(t, cfg.RequirePass)
+	require.Empty(t, cfg.ACLFile)
+}
