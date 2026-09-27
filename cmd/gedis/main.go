@@ -10,13 +10,15 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
-	"github.com/kennethfan/gedis/internal/commands"
 	"github.com/kennethfan/gedis/internal/cluster"
+	"github.com/kennethfan/gedis/internal/commands"
 	"github.com/kennethfan/gedis/internal/config"
 	"github.com/kennethfan/gedis/internal/metrics"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/replication"
+	"github.com/kennethfan/gedis/internal/sentinel"
 	"github.com/kennethfan/gedis/internal/storage"
 )
 
@@ -116,6 +118,41 @@ func run() error {
 	askingReg := commands.NewAskRegistry()
 	clusterH := commands.RegisterCluster(router, store, clusterTopo, askingReg)
 	txnReg.PreExec = clusterH.CheckExec
+	var sentinelSrv *network.Server
+	var sentinelStop chan struct{}
+	if cfg.Sentinel.Enabled {
+		specs, err := cfg.Sentinel.Specs()
+		if err != nil {
+			return fmt.Errorf("invalid sentinel config: %w", err)
+		}
+		sentinelPort := cfg.Sentinel.Port
+		if sentinelPort == 0 {
+			sentinelPort = config.DefaultSentinelPort
+		}
+		sentinelSelf := fmt.Sprintf("%s:%d", cfg.Server.Host, sentinelPort)
+		sentinelReg := sentinel.NewRegistry(specs, time.Duration(cfg.Sentinel.DownAfterMs)*time.Millisecond)
+		sentinelStop = make(chan struct{})
+		sentinelReg.StartProbeLoop(sentinelStop)
+		sRouter := network.DefaultRouter()
+		sentinelPub := commands.RegisterPubSub(sRouter)
+		commands.RegisterSentinel(sRouter, sentinelReg, sentinelSelf, sentinelPub)
+		sentinelSrv = network.NewServer(sRouter)
+		sentinelSrv.OnConnClose(func(c net.Conn) {
+			sentinelPub.ConnClosed(c)
+		})
+		sln, err := net.Listen("tcp", sentinelSelf)
+		if err != nil {
+			close(sentinelStop)
+			return fmt.Errorf("listen sentinel %s: %w", sentinelSelf, err)
+		}
+		slog.Info("sentinel listening", "addr", sln.Addr(), "masters", len(specs))
+		go func() {
+			if err := sentinelSrv.Serve(sln); err != nil {
+				slog.Error("sentinel server exited", "err", err)
+			}
+		}()
+	}
+	txnReg.PreExec = clusterH.CheckExec
 	srv.OnConnClose(func(c net.Conn) {
 		txnReg.ConnClosed(c)
 		pubsubReg.ConnClosed(c)
@@ -137,6 +174,12 @@ func run() error {
 		<-sigCh
 		slog.Info("shutting down")
 		exp.Stop()
+		if sentinelStop != nil {
+			close(sentinelStop)
+		}
+		if sentinelSrv != nil {
+			_ = sentinelSrv.Close()
+		}
 		_ = srv.Close()
 	}()
 
