@@ -70,5 +70,14 @@ func describeLine(name string, snap Snapshot) string {
 		parts = append(parts, "#"+snap.PassHash)
 	}
 	parts = append(parts, snap.Rules...)
+	for _, k := range snap.Keys {
+		parts = append(parts, "~"+k)
+	}
+	for _, c := range snap.Chans {
+		parts = append(parts, "&"+c)
+	}
+	for _, sel := range snap.Selectors {
+		parts = append(parts, sel.Inline())
+	}
 	return strings.Join(parts, " ")
 }

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
@@ -20,6 +21,8 @@ type InterceptFunc func(ctx context.Context, cmd protocol.Value) (reply protocol
 // AuthorizerStore 是鉴权门消费的用户表最小接口，由 internal/acl.Store 实现。
 type AuthorizerStore interface {
 	CanRun(user, cmd string) bool
+	Check(user, cmd string, keys, channels []string) error
+	LogDenied(client, cmd, reason string)
 	UserExists(user string) bool
 	HasRestrictedUsers() bool
 	DefaultRequiresAuth() bool
@@ -86,6 +89,13 @@ func (r *Router) SetAuthorizer(st AuthorizerStore) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.auth = st
+}
+
+// Authorizer 返回挂载的鉴权表（Lua 脚本内检查用）；nil 表关闭。
+func (r *Router) Authorizer() AuthorizerStore {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.auth
 }
 
 // isAuthExempt 是未认证连接仍可执行的命令（AUTH/HELLO/QUIT）。
@@ -173,14 +183,16 @@ func (r *Router) Dispatch(ctx context.Context, cmd protocol.Value) protocol.Valu
 			}
 			return errValue("NOAUTH Authentication required.")
 		}
-		if !auth.CanRun(user, name) {
+		if err := auth.Check(user, name, extractKeys(name, cmd.Elems[1:]), extractChannels(name, cmd.Elems[1:])); err != nil {
 			if stats != nil {
 				stats.incCommands()
 			}
-			if user == "default" {
-				return errValue("NOPERM this user has no permissions to run the '" + strings.ToLower(name) + "' command")
+			client := "test"
+			if conn, ok := ConnFromContext(ctx); ok && conn != nil {
+				client = conn.RemoteAddr().String()
 			}
-			return errValue("NOPERM User " + user + " has no permissions to run the '" + strings.ToLower(name) + "' command")
+			auth.LogDenied(client, name, err.Error())
+			return errValue(err.Error())
 		}
 	}
 	if !ok {
@@ -254,4 +266,34 @@ func bulkString(v protocol.Value) (string, bool) {
 		return "", false
 	}
 	return string(v.Bulk), true
+}
+
+// bulkArgs 取 bulk 参数原文（非 bulk 跳过，与 slowlog 惯例一致）。
+func bulkArgs(elems []protocol.Value) []string {
+	out := make([]string, 0, len(elems))
+	for _, e := range elems {
+		if s, ok := bulkString(e); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// extractKeys 按 key-spec 从参数提 key；未知命令返回空（key 阶段放行）。
+func extractKeys(name string, elems []protocol.Value) []string {
+	return acl.ExtractKeys(name, bulkArgs(elems))
+}
+
+// extractChannels 提订阅/发布命令的 channel 参数。
+func extractChannels(name string, elems []protocol.Value) []string {
+	args := bulkArgs(elems)
+	switch name {
+	case "SUBSCRIBE", "UNSUBSCRIBE", "PSUBSCRIBE", "PUNSUBSCRIBE":
+		return args
+	case "PUBLISH":
+		if len(args) > 0 {
+			return args[:1]
+		}
+	}
+	return nil
 }
