@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"sync"
 )
 
 // Topology 是静态拓扑的运行时视图（见 #40 配置形状决议）。
@@ -14,6 +15,19 @@ type Topology struct {
 	nodes   []TopoNode
 	owned   [NumSlots]bool
 	owner   [NumSlots]int
+
+	mu        sync.RWMutex
+	migrating map[int]string
+	importing map[int]string
+	epoch     uint64
+}
+
+// Snapshot 是迁移态落盘快照：slots 归属 + 双态 + epoch。
+type Snapshot struct {
+	Owner     [NumSlots]int
+	Migrating map[int]string
+	Importing map[int]string
+	Epoch     uint64
 }
 
 // TopoNode 是静态拓扑中的一个服务节点（均为 master，无 gossip）。
@@ -134,6 +148,8 @@ func (t *Topology) Owns(slot int) bool {
 	if t == nil || !t.Enabled || slot < 0 || slot >= NumSlots {
 		return false
 	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	return t.owned[slot] && t.owner[slot] == t.self
 }
 
@@ -142,6 +158,8 @@ func (t *Topology) OwnerAddr(slot int) string {
 	if t == nil || !t.Enabled || slot < 0 || slot >= NumSlots {
 		return ""
 	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	if idx := t.owner[slot]; idx >= 0 && idx < len(t.nodes) {
 		return t.nodes[idx].Addr
 	}
@@ -177,6 +195,8 @@ func (t *Topology) AssignedCount() int {
 	if t == nil || !t.Enabled {
 		return 0
 	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	n := 0
 	for _, o := range t.owner {
 		if o >= 0 {
@@ -184,4 +204,158 @@ func (t *Topology) AssignedCount() int {
 		}
 	}
 	return n
+}
+
+func (t *Topology) SetMigrating(slot int, targetID string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if slot < 0 || slot >= NumSlots {
+		return fmt.Errorf("slot out of range")
+	}
+	if t.owner[slot] != t.self {
+		return fmt.Errorf("not owner")
+	}
+	if cur, ok := t.migrating[slot]; ok && cur == targetID {
+		return nil
+	}
+	if t.migrating == nil {
+		t.migrating = map[int]string{}
+	}
+	t.migrating[slot] = targetID
+	t.epoch++
+	return nil
+}
+
+func (t *Topology) SetImporting(slot int, sourceID string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if slot < 0 || slot >= NumSlots {
+		return fmt.Errorf("slot out of range")
+	}
+	if t.owner[slot] == t.self {
+		return fmt.Errorf("already owner")
+	}
+	if cur, ok := t.importing[slot]; ok && cur == sourceID {
+		return nil
+	}
+	if t.importing == nil {
+		t.importing = map[int]string{}
+	}
+	t.importing[slot] = sourceID
+	t.epoch++
+	return nil
+}
+
+func (t *Topology) SetStable(slot int) {
+	if slot < 0 || slot >= NumSlots {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.migrating, slot)
+	delete(t.importing, slot)
+}
+
+func (t *Topology) SetNode(slot int, nodeID string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if slot < 0 || slot >= NumSlots {
+		return fmt.Errorf("slot out of range")
+	}
+	idx := -1
+	for i := range t.nodes {
+		if t.nodes[i].ID == nodeID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("unknown node")
+	}
+	t.owner[slot] = idx
+	t.owned[slot] = true
+	delete(t.migrating, slot)
+	delete(t.importing, slot)
+	t.epoch++
+	return nil
+}
+
+func (t *Topology) MigratingTo(slot int) (string, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	v, ok := t.migrating[slot]
+	return v, ok
+}
+
+func (t *Topology) ImportingFrom(slot int) (string, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	v, ok := t.importing[slot]
+	return v, ok
+}
+
+func (t *Topology) Epoch() uint64 {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.epoch
+}
+
+func (t *Topology) AddrOf(id string) string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	for i := range t.nodes {
+		if t.nodes[i].ID == id {
+			return t.nodes[i].Addr
+		}
+	}
+	return ""
+}
+
+func (t *Topology) Snapshot() Snapshot {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	snap := Snapshot{Owner: t.owner, Epoch: t.epoch}
+	if len(t.migrating) > 0 {
+		snap.Migrating = make(map[int]string, len(t.migrating))
+		for k, v := range t.migrating {
+			snap.Migrating[k] = v
+		}
+	}
+	if len(t.importing) > 0 {
+		snap.Importing = make(map[int]string, len(t.importing))
+		for k, v := range t.importing {
+			snap.Importing[k] = v
+		}
+	}
+	return snap
+}
+
+func (t *Topology) LoadSnapshot(snap Snapshot) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if snap.Epoch < t.epoch {
+		return fmt.Errorf("epoch regressed")
+	}
+	t.owner = snap.Owner
+	for s := range t.owned {
+		t.owned[s] = t.owner[s] >= 0
+	}
+	if len(snap.Migrating) > 0 {
+		t.migrating = make(map[int]string, len(snap.Migrating))
+		for k, v := range snap.Migrating {
+			t.migrating[k] = v
+		}
+	} else {
+		t.migrating = nil
+	}
+	if len(snap.Importing) > 0 {
+		t.importing = make(map[int]string, len(snap.Importing))
+		for k, v := range snap.Importing {
+			t.importing[k] = v
+		}
+	} else {
+		t.importing = nil
+	}
+	t.epoch = snap.Epoch
+	return nil
 }
