@@ -13,22 +13,24 @@ import (
 )
 
 // fakeRestoreServer 是 MIGRATE 测试替身：扮演目标节点的 TCP 入口，只懂
-// AUTH 与 RESTORE。existing 命中的 key 在无 REPLACE 时回 BUSYKEY。
+// AUTH、ASKING 与 RESTORE。existing 命中的 key 在无 REPLACE 时回 BUSYKEY。
+// requireAsking 为真时模拟 importing 态目标：同一连接未见 ASKING 即对
+// RESTORE 回 MOVED（真机与 gedis 的行为一致）。
 type fakeRestoreServer struct {
-	ln         net.Listener
-	Port       string
-	password   string
-	mu         sync.Mutex
-	gotRestore bool
-	existing   map[string]bool
+	ln            net.Listener
+	Port          string
+	password      string
+	mu            sync.Mutex
+	gotRestore    bool
+	requireAsking bool
+	existing      map[string]bool
 }
 
 func startFakeRestoreServer(t testing.TB, existing []string) *fakeRestoreServer {
 	return startFakeRestoreServerWithAuth(t, existing, "")
 }
 
-func startFakeRestoreServerWithAuth(t testing.TB, existing []string, password string) *fakeRestoreServer {
-	t.Helper()
+func startFakeRestoreServerWithAuth(t testing.TB, existing []string, password string) *fakeRestoreServer {	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	f := &fakeRestoreServer{
@@ -42,6 +44,14 @@ func startFakeRestoreServerWithAuth(t testing.TB, existing []string, password st
 	}
 	t.Cleanup(func() { _ = ln.Close() })
 	go f.serve()
+	return f
+}
+
+func startFakeRestoreServerEnforcingAsking(t testing.TB, existing []string) *fakeRestoreServer {
+	f := startFakeRestoreServer(t, existing)
+	f.mu.Lock()
+	f.requireAsking = true
+	f.mu.Unlock()
 	return f
 }
 
@@ -70,6 +80,7 @@ func (f *fakeRestoreServer) reply(c net.Conn, s string) {
 func (f *fakeRestoreServer) handle(c net.Conn) {
 	defer c.Close()
 	authed := f.password == ""
+	asking := false
 	rd := bufio.NewReader(c)
 	for {
 		v, err := protocol.Decode(rd)
@@ -81,6 +92,9 @@ func (f *fakeRestoreServer) handle(c net.Conn) {
 			return
 		}
 		switch strings.ToUpper(string(v.Elems[0].Bulk)) {
+		case "ASKING":
+			asking = true
+			f.reply(c, "+OK\r\n")
 		case "AUTH":
 			ok := false
 			if len(v.Elems) == 2 && string(v.Elems[1].Bulk) == f.password {
@@ -98,6 +112,13 @@ func (f *fakeRestoreServer) handle(c net.Conn) {
 		case "RESTORE":
 			if !authed {
 				f.reply(c, "-NOAUTH Authentication required.\r\n")
+				continue
+			}
+			f.mu.Lock()
+			reqAsking := f.requireAsking
+			f.mu.Unlock()
+			if reqAsking && !asking {
+				f.reply(c, "-MOVED 7574 127.0.0.1:1\r\n")
 				continue
 			}
 			if len(v.Elems) < 4 {
@@ -166,6 +187,20 @@ func Test_Migrate_when_AuthFailsKeepsSource(t *testing.T) {
 	require.Contains(t, got.S, "WRONGPASS")
 	require.Equal(t, protocol.BulkOf("v3"), dispatch(r, "GET", "mg3"))
 	require.False(t, fake.restored())
+}
+
+// Given: 目标节点处于 importing 态（未见 ASKING 即对 RESTORE 回 MOVED）
+// When: MIGRATE 搬运存在的 key
+// Then: 返回 OK，源 key 被删除，目标收到 RESTORE
+func Test_Migrate_when_TargetRequiresAskingSendsAskingFirst(t *testing.T) {
+	r, _ := openTestSetup(t)
+	fake := startFakeRestoreServerEnforcingAsking(t, nil)
+	require.Equal(t, "OK", dispatch(r, "SET", "mg5", "v5").S)
+	got := dispatch(r, "MIGRATE", "127.0.0.1", fake.Port, "mg5", "0", "1000")
+	require.Equal(t, protocol.KindSimpleString, got.Kind)
+	require.Equal(t, "OK", got.S)
+	require.Nil(t, dispatch(r, "GET", "mg5").Bulk)
+	require.True(t, fake.restored())
 }
 
 // Given: 已存在的源 key
