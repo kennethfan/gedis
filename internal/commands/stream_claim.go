@@ -6,12 +6,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
+var streamClaimMeta = []acl.Meta{
+	{Name: "XACK", Category: "stream", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "XPENDING", Category: "stream", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+}
+
 func (h *streamHandler) registerClaim(r *network.Router) {
+	for _, m := range streamClaimMeta {
+		acl.RegisterMeta(m)
+	}
 	r.Register("XACK", h.xack)
 	r.Register("XPENDING", h.xpending)
 }

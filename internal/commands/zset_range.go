@@ -6,11 +6,28 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
+var zsetRangeMeta = []acl.Meta{
+	{Name: "ZRANGE", Category: "sortedset", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "ZREVRANGE", Category: "sortedset", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "ZRANGEBYSCORE", Category: "sortedset", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "ZREVRANGEBYSCORE", Category: "sortedset", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "ZRANGEBYLEX", Category: "sortedset", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "ZREVRANGEBYLEX", Category: "sortedset", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "ZREMRANGEBYRANK", Category: "sortedset", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "ZREMRANGEBYSCORE", Category: "sortedset", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "ZREMRANGEBYLEX", Category: "sortedset", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "ZRANGESTORE", Category: "sortedset", Keys: acl.KeySpec{Custom: acl.DstSrc}},
+}
+
 func (h *zsetHandler) registerRange(r *network.Router) {
+	for _, m := range zsetRangeMeta {
+		acl.RegisterMeta(m)
+	}
 	r.Register("ZRANGE", h.zrange)
 	r.Register("ZREVRANGE", h.zrevrange)
 	r.Register("ZRANGEBYSCORE", h.zrangebyscore)

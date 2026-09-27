@@ -5,13 +5,24 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
+var listModMeta = []acl.Meta{
+	{Name: "LSET", Category: "list", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "LINSERT", Category: "list", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "LREM", Category: "list", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "LTRIM", Category: "list", Keys: acl.KeySpec{First: 0, Last: 0}},
+}
+
 func (h *listHandler) registerMod(r *network.Router) {
+	for _, m := range listModMeta {
+		acl.RegisterMeta(m)
+	}
 	r.Register("LSET", h.lset)
 	r.Register("LINSERT", h.linsert)
 	r.Register("LREM", h.lrem)

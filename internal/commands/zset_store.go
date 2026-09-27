@@ -4,13 +4,26 @@ import (
 	"context"
 	"strings"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 	"github.com/kennethfan/gedis/internal/storage"
 )
 
+var zsetStoreMeta = []acl.Meta{
+	{Name: "ZUNION", Category: "sortedset", ReadOnly: true, Keys: acl.KeySpec{Custom: acl.NumkeysKeys(0, 1)}},
+	{Name: "ZINTER", Category: "sortedset", ReadOnly: true, Keys: acl.KeySpec{Custom: acl.NumkeysKeys(0, 1)}},
+	{Name: "ZDIFF", Category: "sortedset", ReadOnly: true, Keys: acl.KeySpec{Custom: acl.NumkeysKeys(0, 1)}},
+	{Name: "ZUNIONSTORE", Category: "sortedset", Keys: acl.KeySpec{Custom: acl.ZStoreKeys}},
+	{Name: "ZINTERSTORE", Category: "sortedset", Keys: acl.KeySpec{Custom: acl.ZStoreKeys}},
+	{Name: "ZDIFFSTORE", Category: "sortedset", Keys: acl.KeySpec{Custom: acl.ZStoreKeys}},
+}
+
 func (h *zsetHandler) registerStore(r *network.Router) {
+	for _, m := range zsetStoreMeta {
+		acl.RegisterMeta(m)
+	}
 	r.Register("ZUNION", h.zunion)
 	r.Register("ZINTER", h.zinter)
 	r.Register("ZDIFF", h.zdiff)

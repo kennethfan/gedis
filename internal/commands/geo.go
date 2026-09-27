@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
@@ -12,7 +13,16 @@ import (
 
 // RegisterGeo 注册 Geo 命令；存储复用 z: 前缀的 ZSet 读写（member 名直通，score 为 geohash）。
 // 查询族（SEARCH/RADIUS/STORE）由 geo_search.go 追加。
+var geoMeta = []acl.Meta{
+	{Name: "GEOADD", Category: "geo", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "GEODIST", Category: "geo", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "GEOPOS", Category: "geo", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+}
+
 func RegisterGeo(r *network.Router, kv KV) {
+	for _, m := range geoMeta {
+		acl.RegisterMeta(m)
+	}
 	h := &geoHandler{kv: kv, zh: &zsetHandler{kv: kv}}
 	r.Register("GEOADD", h.geoadd)
 	r.Register("GEODIST", h.geodist)

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 
 	"github.com/kennethfan/gedis/internal/network"
@@ -15,7 +16,18 @@ import (
 // blockPollInterval 是阻塞命令轮询 store 的间隔；事件唤醒留到 network 重构时做。
 const blockPollInterval = 10 * time.Millisecond
 
+var listBlockMeta = []acl.Meta{
+	{Name: "BLPOP", Category: "list", Keys: acl.KeySpec{Custom: acl.AllButLast}},
+	{Name: "BRPOP", Category: "list", Keys: acl.KeySpec{Custom: acl.AllButLast}},
+	{Name: "BLMPOP", Category: "list", Keys: acl.KeySpec{Custom: acl.NumkeysKeys(1, 2)}},
+	{Name: "BRMPOP", Category: "list", Keys: acl.KeySpec{Custom: acl.NumkeysKeys(1, 2)}},
+	{Name: "LPOS", Category: "list", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+}
+
 func (h *listHandler) registerBlock(r *network.Router) {
+	for _, m := range listBlockMeta {
+		acl.RegisterMeta(m)
+	}
 	r.Register("BLPOP", h.blpop)
 	r.Register("BRPOP", h.brpop)
 	r.Register("BLMPOP", h.blmpop)

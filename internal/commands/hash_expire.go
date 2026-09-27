@@ -6,12 +6,26 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
+var hashExpireMeta = []acl.Meta{
+	{Name: "HEXPIRE", Category: "hash", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "HEXPIREAT", Category: "hash", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "HPEXPIRE", Category: "hash", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "HPEXPIREAT", Category: "hash", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "HTTL", Category: "hash", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "HPTTL", Category: "hash", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "HPERSIST", Category: "hash", Keys: acl.KeySpec{First: 0, Last: 0}},
+}
+
 func (h *hashHandler) registerHashExpire(r *network.Router) {
+	for _, m := range hashExpireMeta {
+		acl.RegisterMeta(m)
+	}
 	r.Register("HEXPIRE", func(ctx context.Context, args []protocol.Value) protocol.Value {
 		return h.hexpire(ctx, args, expireRelativeSec)
 	})

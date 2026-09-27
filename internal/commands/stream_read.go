@@ -6,12 +6,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
+var streamReadMeta = []acl.Meta{
+	{Name: "XREAD", Category: "stream", ReadOnly: true, Keys: acl.KeySpec{Custom: acl.XreadKeys}},
+}
+
 func (h *streamHandler) registerRead(r *network.Router) {
+	for _, m := range streamReadMeta {
+		acl.RegisterMeta(m)
+	}
 	r.Register("XREAD", h.xread)
 }
 

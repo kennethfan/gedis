@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
@@ -46,7 +47,19 @@ var subModeAllowed = map[string]bool{
 }
 
 // RegisterPubSub 注册 SUBSCRIBE/UNSUBSCRIBE/PUBLISH，包裹订阅态 PING 并追挂订阅态拦截。
+var pubsubMeta = []acl.Meta{
+	{Name: "SUBSCRIBE", Category: "pubsub", Keys: acl.KeySpec{First: -1}},
+	{Name: "UNSUBSCRIBE", Category: "pubsub", Keys: acl.KeySpec{First: -1}},
+	{Name: "PSUBSCRIBE", Category: "pubsub", Keys: acl.KeySpec{First: -1}},
+	{Name: "PUNSUBSCRIBE", Category: "pubsub", Keys: acl.KeySpec{First: -1}},
+	{Name: "PUBLISH", Category: "pubsub", Keys: acl.KeySpec{First: -1}},
+	{Name: "PING", Category: "connection", ReadOnly: true, Keys: acl.KeySpec{First: -1}},
+}
+
 func RegisterPubSub(r *network.Router) *PubSubRegistry {
+	for _, m := range pubsubMeta {
+		acl.RegisterMeta(m)
+	}
 	reg := &PubSubRegistry{sessions: make(map[net.Conn]*pubsubSession)}
 	r.Register("SUBSCRIBE", reg.handleSubscribe)
 	r.Register("UNSUBSCRIBE", reg.handleUnsubscribe)

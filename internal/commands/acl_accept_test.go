@@ -14,6 +14,7 @@ import (
 
 	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/network"
+	"github.com/kennethfan/gedis/internal/protocol"
 	"github.com/kennethfan/gedis/internal/storage"
 	"github.com/stretchr/testify/require"
 )
@@ -108,4 +109,78 @@ func Test_ACLAccept_Fixtures(t *testing.T) {
 			}
 		}
 	}
+}
+
+// M8 ACL 二期验收：key/channel 拒绝、DRYRUN、selector LIST（真机 7.2.6 fixtures）。
+func Test_ACLAccept_Phase2(t *testing.T) {
+	addr := openACLAccept(t)
+	ac := dialAccept(t, addr)
+
+	ac.do(t, "ACL", "SETUSER", "kuser", "on", ">pw", "+@all", "~app:*")
+	require.Equal(t, "+OK\r\n", ac.line(t))
+	ac.do(t, "ACL", "SETUSER", "cuser", "on", ">pw", "+@all", "~app:*", "&news:*")
+	require.Equal(t, "+OK\r\n", ac.line(t))
+	ac.do(t, "ACL", "SETUSER", "suser", "on", ">pw", "-@all", "(", "+get", "~cache:*", ")")
+	require.Equal(t, "+OK\r\n", ac.line(t))
+
+	// key 拒绝逐字节（真机泛化文案）。
+	ac.do(t, "AUTH", "kuser", "pw")
+	require.Equal(t, "+OK\r\n", ac.line(t))
+	ac.do(t, "SET", "app:a", "1")
+	require.Equal(t, "+OK\r\n", ac.line(t))
+	ac.do(t, "SET", "sys:a", "1")
+	require.Equal(t, aclFixture(t, "noperm_key.bin"), ac.line(t))
+
+	// channel 拒绝逐字节。
+	ac.do(t, "AUTH", "cuser", "pw")
+	require.Equal(t, "+OK\r\n", ac.line(t))
+	ac.do(t, "PUBLISH", "sports", "hi")
+	require.Equal(t, aclFixture(t, "noperm_channel.bin"), ac.line(t))
+
+	// DRYRUN：逐 key 文案 / 未知用户，逐字节（bulk 整值比对）。
+	ac.do(t, "ACL", "DRYRUN", "kuser", "SET", "sys:a", "1")
+	require.Equal(t, aclFixture(t, "dryrun_deny.bin"), string(ac.value(t).Append(nil)))
+	ac.do(t, "ACL", "DRYRUN", "nosuchuser", "SET", "k", "v")
+	require.Equal(t, aclFixture(t, "dryrun_nouser.bin"), ac.line(t))
+
+	// LIST selector 行 token 子集（resetchannels/sanitize 为版本噪音，见 T5-R4）。
+	ac.do(t, "ACL", "LIST")
+	list := ac.value(t)
+	got := map[string]string{}
+	for _, e := range list.Elems {
+		s := string(e.Bulk)
+		got[strings.SplitN(s, " ", 3)[1]] = s
+	}
+	ours, ok := got["suser"]
+	require.True(t, ok, "missing user suser")
+	for _, line := range strings.Split(strings.TrimRight(aclFixture(t, "list_selector.redis"), "\n"), "\n") {
+		for _, tok := range strings.Fields(line) {
+			tok = strings.TrimSuffix(tok, ")")
+			if strings.HasPrefix(tok, "#") || strings.HasPrefix(tok, "+") || strings.HasPrefix(tok, "-") {
+				require.Contains(t, strings.ToLower(ours), strings.ToLower(tok), "user suser")
+			}
+		}
+	}
+	require.Contains(t, ours, "(+get ~cache:*)")
+
+	// GETUSER keys/channels/selectors 段结构存在。
+	ac.do(t, "ACL", "GETUSER", "suser")
+	gu := ac.value(t)
+	fields := map[string]protocol.Value{}
+	for i := 0; i+1 < len(gu.Elems); i += 2 {
+		fields[string(gu.Elems[i].Bulk)] = gu.Elems[i+1]
+	}
+	sels, ok := fields["selectors"]
+	require.True(t, ok, "GETUSER missing selectors section")
+	require.Len(t, sels.Elems, 1)
+	require.Equal(t, "+get", string(sels.Elems[0].Pairs[0].V.Bulk))
+
+	// LOG：拒绝已记录（newest first）且原因同形；RESET 清空。
+	ac.do(t, "ACL", "LOG", "2")
+	lg := ac.value(t)
+	require.Len(t, lg.Elems, 2)
+	require.Equal(t, "NOPERM No permissions to access a channel", string(lg.Elems[0].Elems[3].Bulk))
+	require.Equal(t, "NOPERM No permissions to access a key", string(lg.Elems[1].Elems[3].Bulk))
+	ac.do(t, "ACL", "LOG", "RESET")
+	require.Equal(t, "+OK\r\n", ac.line(t))
 }

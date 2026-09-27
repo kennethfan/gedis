@@ -5,6 +5,7 @@ import (
 	"net"
 	"sync"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
@@ -46,7 +47,14 @@ func (a *AuthRegistry) ConnClosed(c net.Conn) {
 }
 
 // RegisterAuth 注册 AUTH（双形态），返回连接身份注册表。
+var authMeta = []acl.Meta{
+	{Name: "AUTH", Category: "connection", Keys: acl.KeySpec{First: -1}},
+}
+
 func RegisterAuth(r *network.Router, st AuthStore) *AuthRegistry {
+	for _, m := range authMeta {
+		acl.RegisterMeta(m)
+	}
 	reg := NewAuthRegistry()
 	r.Register("AUTH", func(ctx context.Context, args []protocol.Value) protocol.Value {
 		strs := make([]string, len(args))

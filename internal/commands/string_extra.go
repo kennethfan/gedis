@@ -4,12 +4,23 @@ import (
 	"context"
 	"strconv"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
+var stringExtraMeta = []acl.Meta{
+	{Name: "APPEND", Category: "string", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "STRLEN", Category: "string", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "SETRANGE", Category: "string", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "GETRANGE", Category: "string", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+}
+
 func (s *stringHandler) registerExtra(r *network.Router) {
+	for _, m := range stringExtraMeta {
+		acl.RegisterMeta(m)
+	}
 	r.Register("APPEND", s.append)
 	r.Register("STRLEN", s.strlen)
 	r.Register("SETRANGE", s.setrange)

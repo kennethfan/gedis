@@ -16,6 +16,7 @@ import (
 	lua "github.com/yuin/gopher-lua"
 	"github.com/yuin/gopher-lua/parse"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
@@ -121,7 +122,16 @@ func (r *LuaRegistry) wasKilled(rr *luaRun) bool {
 
 // RegisterLua 注册 EVAL/EVALSHA/SCRIPT；返回 registry（纯缓存，无连接状态，无需 ConnClosed）。
 // timeout 为单脚本执行上限（0 表示不限，kill 仍可中断）；默认 5s 由调用方按配置传入。
+var luaMeta = []acl.Meta{
+	{Name: "EVAL", Category: "scripting", Keys: acl.KeySpec{Custom: acl.EvalKeys}},
+	{Name: "EVALSHA", Category: "scripting", Keys: acl.KeySpec{Custom: acl.EvalKeys}},
+	{Name: "SCRIPT", Category: "scripting", Keys: acl.KeySpec{First: -1}},
+}
+
 func RegisterLua(r *network.Router, timeout time.Duration) *LuaRegistry {
+	for _, m := range luaMeta {
+		acl.RegisterMeta(m)
+	}
 	reg := &LuaRegistry{scripts: make(map[string]string)}
 	exec := &luaExec{router: r, reg: reg, timeout: timeout}
 	r.Register("EVAL", exec.handleEval)
@@ -697,6 +707,59 @@ func hasBlockOption(elems []protocol.Value) bool {
 	return false
 }
 
+// checkScriptACL 对脚本内单条 redis.call 做三阶检查；通过返回 ""。
+// 身份与 Router 门同规则（未认证按 default；NOAUTH 由外层 EVAL 门前置处理）。
+func (e *luaExec) checkScriptACL(ctx context.Context, upName string, elems []protocol.Value) string {
+	az := e.router.Authorizer()
+	if az == nil || !az.HasRestrictedUsers() {
+		return ""
+	}
+	user, ok := network.UserFromContext(ctx)
+	if !ok || user == "" {
+		user = acl.DefaultUser
+	}
+	strs := make([]string, 0, len(elems))
+	for _, v := range elems {
+		if s, ok := argString(v); ok {
+			strs = append(strs, s)
+		}
+	}
+	if err := az.Check(user, upName, acl.ExtractKeys(upName, strs), luaChannels(upName, strs)); err != nil {
+		return scriptDenial(err)
+	}
+	return ""
+}
+
+// scriptDenial 把脚本内拒绝包装为真机同形：
+// ERR 外层由 run() 统一补 ` script: <sha>, on @user_script:1.`，此处只产
+// `ACL failure in script: <reason>`（key/channel 用泛化 reason，命令用去前缀原文）。
+func scriptDenial(err error) string {
+	reason := err.Error()
+	if d, ok := acl.AsDenial(err); ok {
+		switch d.Kind {
+		case acl.DenyKey:
+			reason = "No permissions to access a key"
+		case acl.DenyChannel:
+			reason = "No permissions to access a channel"
+		default:
+			reason = strings.TrimPrefix(d.Error(), "NOPERM ")
+		}
+	}
+	return "ACL failure in script: " + reason
+}
+
+func luaChannels(name string, args []string) []string {
+	switch name {
+	case "SUBSCRIBE", "UNSUBSCRIBE", "PSUBSCRIBE", "PUNSUBSCRIBE":
+		return args
+	case "PUBLISH":
+		if len(args) > 0 {
+			return args[:1]
+		}
+	}
+	return nil
+}
+
 // luaCall 实现 redis.call/pcall：直调 Router.Handler，错误在 call 下 raise、pcall 下装 {err} 表。
 // 写命令实际分发即标脏（回复错误也算；未知命令/arity 等分发前拒绝的不脏）。
 func (e *luaExec) luaCall(ctx context.Context, pcall bool, rr *luaRun) lua.LGFunction {
@@ -726,6 +789,9 @@ func (e *luaExec) luaCall(ctx context.Context, pcall bool, rr *luaRun) lua.LGFun
 		}
 		if _, denied := luaNoScriptCmds[upName]; denied {
 			return e.raiseOrTable(L, pcall, "ERR This Redis command is not allowed from script")
+		}
+		if errStr := e.checkScriptACL(ctx, upName, elems); errStr != "" {
+			return e.raiseOrTable(L, pcall, errStr)
 		}
 		if upName == "XREAD" && hasBlockOption(elems) {
 			return e.raiseOrTable(L, pcall, "ERR "+string(nameStr)+" command is not allowed with BLOCK option from scripts")

@@ -5,11 +5,20 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
+var bitmapCountMeta = []acl.Meta{
+	{Name: "BITCOUNT", Category: "bitmap", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "BITPOS", Category: "bitmap", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+}
+
 func (h *bitmapHandler) registerCount(r *network.Router) {
+	for _, m := range bitmapCountMeta {
+		acl.RegisterMeta(m)
+	}
 	r.Register("BITCOUNT", h.bitcount)
 	r.Register("BITPOS", h.bitpos)
 }

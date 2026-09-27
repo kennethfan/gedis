@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 	"github.com/kennethfan/gedis/internal/replication"
@@ -14,7 +15,15 @@ import (
 
 // RegisterReplication 注册 PSYNC（主库侧）与 REPLICAOF；REPLICAOF 启停
 // 复本客户端并切换只读模式与 Stats 角色。
+var replicationMeta = []acl.Meta{
+	{Name: "PSYNC", Category: "admin", Keys: acl.KeySpec{First: -1}},
+	{Name: "REPLICAOF", Category: "admin", Keys: acl.KeySpec{First: -1}},
+}
+
 func RegisterReplication(r *network.Router, kv KV, stats *network.Stats, hub *replication.Hub) {
+	for _, m := range replicationMeta {
+		acl.RegisterMeta(m)
+	}
 	h := &replHandler{router: r, kv: kv, stats: stats, hub: hub}
 	r.Register("PSYNC", h.psync)
 	r.Register("REPLICAOF", h.replicaof)
