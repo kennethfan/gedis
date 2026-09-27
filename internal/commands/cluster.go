@@ -92,9 +92,21 @@ func RegisterCluster(r *network.Router, kv KV, topo *cluster.Topology, asking *A
 }
 
 type clusterHandler struct {
-	kv     KV
-	topo   *cluster.Topology
-	askReg *AskRegistry
+	kv      KV
+	topo    *cluster.Topology
+	askReg  *AskRegistry
+	persist func(cluster.Snapshot) error
+}
+
+func (c *clusterHandler) SetPersist(fn func(cluster.Snapshot) error) {
+	c.persist = fn
+}
+
+func (c *clusterHandler) saveSnapshot() error {
+	if c.persist == nil || c.topo == nil {
+		return nil
+	}
+	return c.persist(c.topo.Snapshot())
 }
 
 func (c *clusterHandler) enabled() bool {
@@ -408,7 +420,7 @@ func (c *clusterHandler) reset(rest []protocol.Value) protocol.Value {
 	return errValueStr("ERR Static cluster topology does not support CLUSTER RESET")
 }
 
-// setslot 逐分支对标真机前置校验（owner/busy/self），通过后静态拒绝。
+// setslot 实现迁移三态机（MIGRATING/IMPORTING/STABLE/NODE），写内存即落盘。
 func (c *clusterHandler) setslot(rest []protocol.Value) protocol.Value {
 	if len(rest) < 2 {
 		return clusterArgErr("SETSLOT")
@@ -427,20 +439,53 @@ func (c *clusterHandler) setslot(rest []protocol.Value) protocol.Value {
 		if len(rest) != 3 {
 			return errValueStr("ERR syntax error")
 		}
-		if !c.topo.Owns(slot) {
+		target, _ := argString(rest[2])
+		if c.topo.AddrOf(target) == "" {
+			return errValueStr(fmt.Sprintf("ERR I don't know about node %s", target))
+		}
+		if err := c.topo.SetMigrating(slot, target); err != nil {
 			return errValueStr(fmt.Sprintf("ERR I'm not the owner of hash slot %d", slot))
 		}
-		return errValueStr("ERR Static cluster topology does not support CLUSTER SETSLOT")
+		if err := c.saveSnapshot(); err != nil {
+			return errValueStr("ERR Failed to persist cluster state")
+		}
+		return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
 	case "IMPORTING":
 		if len(rest) != 3 {
 			return errValueStr("ERR syntax error")
 		}
-		if c.topo.Owns(slot) {
+		source, _ := argString(rest[2])
+		if c.topo.AddrOf(source) == "" {
+			return errValueStr(fmt.Sprintf("ERR I don't know about node %s", source))
+		}
+		if err := c.topo.SetImporting(slot, source); err != nil {
 			return errValueStr("ERR I'm already the owner of hash slot.")
 		}
-		return errValueStr("ERR Static cluster topology does not support CLUSTER SETSLOT")
-	case "STABLE", "NODE":
-		return errValueStr("ERR Static cluster topology does not support CLUSTER SETSLOT")
+		if err := c.saveSnapshot(); err != nil {
+			return errValueStr("ERR Failed to persist cluster state")
+		}
+		return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
+	case "STABLE":
+		if len(rest) != 2 {
+			return errValueStr("ERR syntax error")
+		}
+		c.topo.SetStable(slot)
+		if err := c.saveSnapshot(); err != nil {
+			return errValueStr("ERR Failed to persist cluster state")
+		}
+		return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
+	case "NODE":
+		if len(rest) != 3 {
+			return errValueStr("ERR syntax error")
+		}
+		id, _ := argString(rest[2])
+		if err := c.topo.SetNode(slot, id); err != nil {
+			return errValueStr(fmt.Sprintf("ERR I don't know about node %s", id))
+		}
+		if err := c.saveSnapshot(); err != nil {
+			return errValueStr("ERR Failed to persist cluster state")
+		}
+		return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
 	default:
 		return errValueStr("ERR syntax error")
 	}

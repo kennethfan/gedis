@@ -251,9 +251,9 @@ func Test_Cluster_when_TopologyMutation(t *testing.T) {
 	}
 	got := dispatch(r, "CLUSTER", "SETSLOT", "12182", "MIGRATING", "someid")
 	require.Equal(t, protocol.KindError, got.Kind)
-	require.Equal(t, "ERR I'm not the owner of hash slot 12182", got.S)
+	require.Equal(t, "ERR I don't know about node someid", got.S)
 	got = dispatch(r, "CLUSTER", "SETSLOT", "12182", "IMPORTING", "someid")
-	require.Equal(t, "ERR Static cluster topology does not support CLUSTER SETSLOT", got.S)
+	require.Equal(t, "ERR I don't know about node someid", got.S)
 	got = dispatch(r, "CLUSTER", "BOGUS")
 	require.True(t, strings.HasPrefix(got.S, "ERR unknown subcommand"))
 }

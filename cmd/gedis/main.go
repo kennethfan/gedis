@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -37,6 +38,24 @@ func mustParseFsync(s string) storage.FsyncPolicy {
 		os.Exit(1)
 	}
 	return policy
+}
+
+func loadClusterSnapshot(path string, topo *cluster.Topology) error {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read cluster snapshot: %w", err)
+	}
+	snap, err := cluster.UnmarshalSnapshot(data, topo.Nodes())
+	if err != nil {
+		return fmt.Errorf("parse cluster snapshot: %w", err)
+	}
+	if err := topo.LoadSnapshot(snap); err != nil {
+		return fmt.Errorf("load cluster snapshot: %w", err)
+	}
+	return nil
 }
 
 func run() error {
@@ -119,6 +138,16 @@ func run() error {
 	askingReg := commands.NewAskRegistry()
 	clusterH := commands.RegisterCluster(router, store, clusterTopo, askingReg)
 	txnReg.PreExec = clusterH.CheckExec
+	if clusterTopo != nil && cfg.Storage.DataDir != "" {
+		snapPath := filepath.Join(cfg.Storage.DataDir, "nodes.conf")
+		if err := loadClusterSnapshot(snapPath, clusterTopo); err != nil {
+			return err
+		}
+		nodes := clusterTopo.Nodes()
+		clusterH.SetPersist(func(snap cluster.Snapshot) error {
+			return os.WriteFile(snapPath, cluster.MarshalSnapshot(snap, nodes), 0o644)
+		})
+	}
 	aclStore := acl.NewStore()
 	if cfg.ACLFile != "" {
 		if err := acl.Load(cfg.ACLFile, aclStore); err != nil {
