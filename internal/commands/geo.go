@@ -203,7 +203,8 @@ func (h *geoHandler) geodist(ctx context.Context, args []protocol.Value) protoco
 	return protocol.BulkOf(strconv.FormatFloat(d, 'f', 4, 64))
 }
 
-func (h *geoHandler) geopos(ctx context.Context, args []protocol.Value) protocol.Value {	if len(args) < 2 {
+func (h *geoHandler) geopos(ctx context.Context, args []protocol.Value) protocol.Value {
+	if len(args) < 2 {
 		return errValueStr("ERR wrong number of arguments for 'geopos' command")
 	}
 	key, ok := argString(args[0])

@@ -191,7 +191,7 @@ func (s *Stream) Top() (StreamID, bool) {
 func EncodeStream(s *Stream) []byte {
 	size := 2 * binary.MaxVarintLen64
 	for _, e := range s.Entries {
-		size += 3*binary.MaxVarintLen64
+		size += 3 * binary.MaxVarintLen64
 		for _, f := range e.Fields {
 			size += binary.MaxVarintLen64 + len(f)
 		}

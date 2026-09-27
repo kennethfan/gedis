@@ -123,12 +123,16 @@ func (h *streamHandler) xinfoStream(ctx context.Context, args []protocol.Value) 
 		firstID = s.Entries[0].ID.String()
 	}
 	out := []protocol.Value{
-		protocol.BulkOf("length"), {Kind: protocol.KindInteger, I: int64(len(s.Entries))},
-		protocol.BulkOf("radix-tree-keys"), {Kind: protocol.KindInteger, I: 0},
-		protocol.BulkOf("radix-tree-nodes"), {Kind: protocol.KindInteger, I: 0},
+		protocol.BulkOf("length"),
+		{Kind: protocol.KindInteger, I: int64(len(s.Entries))},
+		protocol.BulkOf("radix-tree-keys"),
+		{Kind: protocol.KindInteger, I: 0},
+		protocol.BulkOf("radix-tree-nodes"),
+		{Kind: protocol.KindInteger, I: 0},
 		protocol.BulkOf("last-generated-id"), protocol.BulkOf(lastID),
 		protocol.BulkOf("max-deleted-entry-id"), protocol.BulkOf(s.MaxDeleted.String()),
-		protocol.BulkOf("entries-added"), {Kind: protocol.KindInteger, I: int64(s.Added)},
+		protocol.BulkOf("entries-added"),
+		{Kind: protocol.KindInteger, I: int64(s.Added)},
 		protocol.BulkOf("recorded-first-entry-id"), protocol.BulkOf(firstID),
 	}
 	if !full {
@@ -179,8 +183,8 @@ func (h *streamHandler) groupDetailValue(s *datastruct.Stream, g *datastruct.Str
 		pending = append(pending, protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
 			protocol.BulkOf(p.ID.String()),
 			protocol.BulkOf(p.Consumer),
-			protocol.Value{Kind: protocol.KindInteger, I: int64(p.DeliveryMs)},
-			protocol.Value{Kind: protocol.KindInteger, I: int64(p.Count)},
+			{Kind: protocol.KindInteger, I: int64(p.DeliveryMs)},
+			{Kind: protocol.KindInteger, I: int64(p.Count)},
 		}})
 	}
 	consumers := make([]protocol.Value, 0, len(g.Consumers))
@@ -198,8 +202,8 @@ func (h *streamHandler) groupDetailValue(s *datastruct.Stream, g *datastruct.Str
 			}
 			cp = append(cp, protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
 				protocol.BulkOf(p.ID.String()),
-				protocol.Value{Kind: protocol.KindInteger, I: int64(p.DeliveryMs)},
-				protocol.Value{Kind: protocol.KindInteger, I: int64(p.Count)},
+				{Kind: protocol.KindInteger, I: int64(p.DeliveryMs)},
+				{Kind: protocol.KindInteger, I: int64(p.Count)},
 			}})
 		}
 		if cp == nil {
@@ -211,10 +215,13 @@ func (h *streamHandler) groupDetailValue(s *datastruct.Stream, g *datastruct.Str
 		}
 		consumers = append(consumers, protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
 			protocol.BulkOf("name"), protocol.BulkOf(c.Name),
-			protocol.BulkOf("seen-time"), protocol.Value{Kind: protocol.KindInteger, I: int64(c.SeenMs)},
+			protocol.BulkOf("seen-time"),
+			{Kind: protocol.KindInteger, I: int64(c.SeenMs)},
 			protocol.BulkOf("active-time"), activeV,
-			protocol.BulkOf("pel-count"), protocol.Value{Kind: protocol.KindInteger, I: n},
-			protocol.BulkOf("pending"), protocol.Value{Kind: protocol.KindArray, Elems: cp},
+			protocol.BulkOf("pel-count"),
+			{Kind: protocol.KindInteger, I: n},
+			protocol.BulkOf("pending"),
+			{Kind: protocol.KindArray, Elems: cp},
 		}})
 	}
 	return protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
@@ -222,9 +229,12 @@ func (h *streamHandler) groupDetailValue(s *datastruct.Stream, g *datastruct.Str
 		protocol.BulkOf("last-delivered-id"), protocol.BulkOf(g.LastID.String()),
 		protocol.BulkOf("entries-read"), readV,
 		protocol.BulkOf("lag"), lagV,
-		protocol.BulkOf("pel-count"), protocol.Value{Kind: protocol.KindInteger, I: int64(len(g.PEL))},
-		protocol.BulkOf("pending"), protocol.Value{Kind: protocol.KindArray, Elems: pending},
-		protocol.BulkOf("consumers"), protocol.Value{Kind: protocol.KindArray, Elems: consumers},
+		protocol.BulkOf("pel-count"),
+		{Kind: protocol.KindInteger, I: int64(len(g.PEL))},
+		protocol.BulkOf("pending"),
+		{Kind: protocol.KindArray, Elems: pending},
+		protocol.BulkOf("consumers"),
+		{Kind: protocol.KindArray, Elems: consumers},
 	}}
 }
 
@@ -254,8 +264,10 @@ func (h *streamHandler) xinfoGroups(ctx context.Context, args []protocol.Value) 
 		}
 		out = append(out, protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
 			protocol.BulkOf("name"), protocol.BulkOf(g.Name),
-			protocol.BulkOf("consumers"), protocol.Value{Kind: protocol.KindInteger, I: int64(len(g.Consumers))},
-			protocol.BulkOf("pending"), protocol.Value{Kind: protocol.KindInteger, I: int64(len(g.PEL))},
+			protocol.BulkOf("consumers"),
+			{Kind: protocol.KindInteger, I: int64(len(g.Consumers))},
+			protocol.BulkOf("pending"),
+			{Kind: protocol.KindInteger, I: int64(len(g.PEL))},
 			protocol.BulkOf("last-delivered-id"), protocol.BulkOf(g.LastID.String()),
 			protocol.BulkOf("entries-read"), readV,
 			protocol.BulkOf("lag"), lagV,
@@ -306,7 +318,8 @@ func (h *streamHandler) xinfoConsumers(ctx context.Context, args []protocol.Valu
 		}
 		out = append(out, protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
 			protocol.BulkOf("name"), protocol.BulkOf(c.Name),
-			protocol.BulkOf("pending"), protocol.Value{Kind: protocol.KindInteger, I: n},
+			protocol.BulkOf("pending"),
+			{Kind: protocol.KindInteger, I: n},
 			protocol.BulkOf("idle"), idleV,
 			protocol.BulkOf("inactive"), inactiveV,
 		}})
@@ -622,4 +635,3 @@ func (h *streamHandler) xgroupDelConsumer(ctx context.Context, args []protocol.V
 	}
 	return protocol.Value{Kind: protocol.KindInteger, I: dropped}
 }
-

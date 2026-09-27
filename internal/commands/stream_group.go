@@ -212,7 +212,7 @@ func (h *streamHandler) xreadgroup(ctx context.Context, args []protocol.Value) p
 		}
 		out = append(out, protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
 			protocol.BulkOf(r.req.key),
-			protocol.Value{Kind: protocol.KindArray, Elems: vals},
+			{Kind: protocol.KindArray, Elems: vals},
 		}})
 	}
 	if out == nil {

@@ -52,8 +52,10 @@ type cjsonSnap struct {
 func (s *cjsonSettings) snapshot() cjsonSnap {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return cjsonSnap{maxDepth: s.maxDepth, decDepth: s.decDepth, precision: int(s.precision),
-		sparseConv: s.sparseConv, sparseRatio: s.sparseRatio, sparseMax: s.sparseMax}
+	return cjsonSnap{
+		maxDepth: s.maxDepth, decDepth: s.decDepth, precision: int(s.precision),
+		sparseConv: s.sparseConv, sparseRatio: s.sparseRatio, sparseMax: s.sparseMax,
+	}
 }
 
 // registerCjsonLib 注册 cjson 全局表（encode/decode/null/new/_NAME/_VERSION）。
@@ -65,23 +67,24 @@ type cjsonErr struct {
 	msg string
 }
 
-func (e *cjsonErr) String() string        { return e.msg }
+func (e *cjsonErr) String() string       { return e.msg }
 func (e *cjsonErr) Type() lua.LValueType { return lua.LTString }
 
 func cjsonRaise(L *lua.LState, msg string) int {
 	L.Error(&cjsonErr{pos: L.Where(1) + " ", msg: msg}, 0)
 	return 0
 }
+
 func registerCjsonLib(L *lua.LState, cfg *cjsonSettings) {
 	lib := L.NewTable()
 	L.SetFuncs(lib, map[string]lua.LGFunction{
-		"encode":               mkCjsonEncode(cfg),
-		"decode":               mkCjsonDecode(cfg),
-		"new":                  cjsonNew,
-		"encode_max_depth":     mkCjsonDepth(cfg, "encode_max_depth", true),
-		"decode_max_depth":     mkCjsonDepth(cfg, "decode_max_depth", false),
+		"encode":                  mkCjsonEncode(cfg),
+		"decode":                  mkCjsonDecode(cfg),
+		"new":                     cjsonNew,
+		"encode_max_depth":        mkCjsonDepth(cfg, "encode_max_depth", true),
+		"decode_max_depth":        mkCjsonDepth(cfg, "decode_max_depth", false),
 		"encode_number_precision": mkCjsonPrecision(cfg),
-		"encode_sparse_array":  mkCjsonSparse(cfg),
+		"encode_sparse_array":     mkCjsonSparse(cfg),
 	})
 	lib.RawSetString("null", cjsonNull)
 	lib.RawSetString("_NAME", lua.LString("cjson"))

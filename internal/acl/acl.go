@@ -20,11 +20,11 @@ type ruleOp struct {
 }
 
 type User struct {
-	On       bool
-	NoPass   bool
-	passHash [32]byte
-	hasPass  bool
-	rules    []ruleOp
+	On          bool
+	NoPass      bool
+	passHash    [32]byte
+	hasPass     bool
+	rules       []ruleOp
 	KeyPatterns []string
 	Channels    []string
 	Selectors   []Selector
@@ -32,8 +32,8 @@ type User struct {
 
 // Selector 是括号规则组（命令+key+channel 三元组，Check 时与主规则 OR）。
 type Selector struct {
-	Cmds []ruleOp
-	Keys []string
+	Cmds  []ruleOp
+	Keys  []string
 	Chans []string
 }
 
@@ -189,10 +189,10 @@ const (
 // Denial 是 Check 的拒绝形态：Error() 为直接下发客户端的 NOPERM 原文；
 // Kind/Name 供 DRYRUN（逐 key 文案）与脚本内检查（ACL failure in script 包装）改写。
 type Denial struct {
-	Kind       DenyKind
-	User, Cmd  string
-	Name       string
-	msg        string
+	Kind      DenyKind
+	User, Cmd string
+	Name      string
+	msg       string
 }
 
 func (d *Denial) Error() string { return d.msg }
@@ -406,6 +406,7 @@ func (s *Store) DefaultRequiresAuth() bool {
 	u, ok := s.users[DefaultUser]
 	return !ok || !u.On || (!u.NoPass && u.hasPass)
 }
+
 // 纯默认（on nopass +@all）时为 false，鉴权门零开销通过。
 // HasRestrictedUsers 存在除默认全开放 default 外的用户配置即 true；
 // 纯默认（on nopass +@all）时为 false，鉴权门零开销通过。

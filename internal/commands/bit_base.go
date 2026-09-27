@@ -155,4 +155,3 @@ func (h *bitmapHandler) getbit(ctx context.Context, args []protocol.Value) proto
 	}
 	return protocol.Value{Kind: protocol.KindInteger, I: getBitAt(buf, off)}
 }
-

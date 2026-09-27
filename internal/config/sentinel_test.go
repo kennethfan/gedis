@@ -7,8 +7,10 @@ import (
 )
 
 func TestSentinelSpecs_Valid(t *testing.T) {
-	cfg := Sentinel{Enabled: true, Port: 26379, DownAfterMs: 5000,
-		Masters: []SentinelMaster{{Name: "mymaster", MasterAddr: "127.0.0.1:6380", Quorum: 1, Slaves: []string{"127.0.0.1:6381"}}}}
+	cfg := Sentinel{
+		Enabled: true, Port: 26379, DownAfterMs: 5000,
+		Masters: []SentinelMaster{{Name: "mymaster", MasterAddr: "127.0.0.1:6380", Quorum: 1, Slaves: []string{"127.0.0.1:6381"}}},
+	}
 	specs, err := cfg.Specs()
 	if err != nil {
 		t.Fatalf("specs: %v", err)
