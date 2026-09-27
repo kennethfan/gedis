@@ -119,7 +119,7 @@ make bench   # 基准测试
 
 ## Scope（v1 未实现）
 
-Pub/Sub、Lua、MULTI/事务、Cluster、Sentinel。
+Sentinel 自动故障转移与哨兵 gossip、Cluster slot 迁移（resharding）、ACL/TLS。
 
 ## License
 
