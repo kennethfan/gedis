@@ -27,6 +27,9 @@ type Config struct {
 	Lua         Lua         `toml:"lua"`
 	Cluster     Cluster     `toml:"cluster"`
 	Sentinel    Sentinel    `toml:"sentinel"`
+	// RequirePass 映射为 default 用户口令（空=默认全开放）；ACLFile 缺席即关闭持久化。
+	RequirePass string `toml:"requirepass"`
+	ACLFile     string `toml:"aclfile"`
 }
 
 // Server holds listener settings.

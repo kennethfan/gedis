@@ -6,11 +6,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
+var zsetBlockMeta = []acl.Meta{
+	{Name: "BZPOPMIN", Category: "sortedset", Keys: acl.KeySpec{Custom: acl.AllButLast}},
+	{Name: "BZPOPMAX", Category: "sortedset", Keys: acl.KeySpec{Custom: acl.AllButLast}},
+	{Name: "BZMPOP", Category: "sortedset", Keys: acl.KeySpec{Custom: acl.NumkeysKeys(1, 2)}},
+}
+
 func (h *zsetHandler) registerBlockZ(r *network.Router) {
+	for _, m := range zsetBlockMeta {
+		acl.RegisterMeta(m)
+	}
 	r.Register("BZPOPMIN", h.bzpopmin)
 	r.Register("BZPOPMAX", h.bzpopmax)
 	r.Register("BZMPOP", h.bzmpop)

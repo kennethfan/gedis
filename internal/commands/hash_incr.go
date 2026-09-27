@@ -4,11 +4,20 @@ import (
 	"context"
 	"strconv"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
+var hashIncrMeta = []acl.Meta{
+	{Name: "HINCRBY", Category: "hash", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "HINCRBYFLOAT", Category: "hash", Keys: acl.KeySpec{First: 0, Last: 0}},
+}
+
 func (h *hashHandler) registerIncr(r *network.Router) {
+	for _, m := range hashIncrMeta {
+		acl.RegisterMeta(m)
+	}
 	r.Register("HINCRBY", h.hincrby)
 	r.Register("HINCRBYFLOAT", h.hincrbyfloat)
 }

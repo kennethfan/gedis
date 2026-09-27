@@ -6,13 +6,26 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
 // RegisterHash 注册全部 hash 命令。
+var hashMeta = []acl.Meta{
+	{Name: "HSET", Category: "hash", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "HGET", Category: "hash", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "HDEL", Category: "hash", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "HSETNX", Category: "hash", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "HEXISTS", Category: "hash", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "HLEN", Category: "hash", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+}
+
 func RegisterHash(r *network.Router, kv KV) {
+	for _, m := range hashMeta {
+		acl.RegisterMeta(m)
+	}
 	h := &hashHandler{kv: kv}
 	r.Register("HSET", h.hset)
 	r.Register("HGET", h.hget)

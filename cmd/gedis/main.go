@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/cluster"
 	"github.com/kennethfan/gedis/internal/commands"
 	"github.com/kennethfan/gedis/internal/config"
@@ -118,6 +119,25 @@ func run() error {
 	askingReg := commands.NewAskRegistry()
 	clusterH := commands.RegisterCluster(router, store, clusterTopo, askingReg)
 	txnReg.PreExec = clusterH.CheckExec
+	aclStore := acl.NewStore()
+	if cfg.ACLFile != "" {
+		if err := acl.Load(cfg.ACLFile, aclStore); err != nil {
+			return fmt.Errorf("load aclfile: %w", err)
+		}
+	}
+	if cfg.RequirePass != "" {
+		if err := aclStore.SetUser("default", "on", ">"+cfg.RequirePass, "+@all"); err != nil {
+			return fmt.Errorf("invalid requirepass: %w", err)
+		}
+	}
+	authReg := commands.RegisterAuth(router, aclStore)
+	var aclSaver commands.ACLSaver
+	if cfg.ACLFile != "" {
+		aclSaver = func() error { return acl.Save(cfg.ACLFile, aclStore) }
+	}
+	commands.RegisterACL(router, aclStore, authReg, aclSaver)
+	router.SetAuthorizer(aclStore)
+	srv.UserProvider = authReg
 	var sentinelSrv *network.Server
 	var sentinelStop chan struct{}
 	if cfg.Sentinel.Enabled {
@@ -157,6 +177,7 @@ func run() error {
 		txnReg.ConnClosed(c)
 		pubsubReg.ConnClosed(c)
 		askingReg.ConnClosed(c)
+		authReg.ConnClosed(c)
 	})
 	exp := commands.NewExpirer(store, stats)
 	exp.Start()

@@ -4,13 +4,25 @@ import (
 	"context"
 	"strconv"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
 // registerIncr 注册 INCR/DECR 系列，由 RegisterStrings 调用。
+var stringIncrMeta = []acl.Meta{
+	{Name: "INCR", Category: "string", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "INCRBY", Category: "string", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "DECR", Category: "string", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "DECRBY", Category: "string", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "INCRBYFLOAT", Category: "string", Keys: acl.KeySpec{First: 0, Last: 0}},
+}
+
 func (s *stringHandler) registerIncr(r *network.Router) {
+	for _, m := range stringIncrMeta {
+		acl.RegisterMeta(m)
+	}
 	r.Register("INCR", s.incr)
 	r.Register("INCRBY", s.incrby)
 	r.Register("DECR", s.decr)

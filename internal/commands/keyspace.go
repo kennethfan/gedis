@@ -6,13 +6,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 	"github.com/kennethfan/gedis/internal/storage"
 )
 
+var keyspaceMeta = []acl.Meta{
+	{Name: "TYPE", Category: "keyspace", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "EXISTS", Category: "keyspace", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "KEYS", Category: "keyspace", ReadOnly: true, Keys: acl.KeySpec{First: -1}},
+}
+
 func (s *stringHandler) registerKeyspace(r *network.Router) {
+	for _, m := range keyspaceMeta {
+		acl.RegisterMeta(m)
+	}
 	r.Register("TYPE", s.type_)
 	r.Register("EXISTS", s.exists)
 	r.Register("KEYS", s.keys)

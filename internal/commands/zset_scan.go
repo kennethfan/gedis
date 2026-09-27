@@ -7,11 +7,20 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
+var zsetScanMeta = []acl.Meta{
+	{Name: "ZRANDMEMBER", Category: "sortedset", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "ZSCAN", Category: "sortedset", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+}
+
 func (h *zsetHandler) registerScanZ(r *network.Router) {
+	for _, m := range zsetScanMeta {
+		acl.RegisterMeta(m)
+	}
 	r.Register("ZRANDMEMBER", h.zrandmember)
 	r.Register("ZSCAN", h.zscan)
 }

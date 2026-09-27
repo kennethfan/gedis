@@ -6,11 +6,24 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
+var hashMultiMeta = []acl.Meta{
+	{Name: "HMSET", Category: "hash", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "HMGET", Category: "hash", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "HGETALL", Category: "hash", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "HKEYS", Category: "hash", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "HVALS", Category: "hash", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "HSCAN", Category: "hash", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+}
+
 func (h *hashHandler) registerMulti(r *network.Router) {
+	for _, m := range hashMultiMeta {
+		acl.RegisterMeta(m)
+	}
 	r.Register("HMSET", h.hmset)
 	r.Register("HMGET", h.hmget)
 	r.Register("HGETALL", h.hgetall)

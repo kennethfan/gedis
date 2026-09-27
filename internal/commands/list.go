@@ -5,13 +5,27 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
 // RegisterList 注册全部 list 命令；stats 为 nil 时 blocked_clients 不计数。
+var listMeta = []acl.Meta{
+	{Name: "LPUSH", Category: "list", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "RPUSH", Category: "list", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "LPOP", Category: "list", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "RPOP", Category: "list", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "LLEN", Category: "list", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "LINDEX", Category: "list", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "LRANGE", Category: "list", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+}
+
 func RegisterList(r *network.Router, kv KV, stats *network.Stats) {
+	for _, m := range listMeta {
+		acl.RegisterMeta(m)
+	}
 	h := &listHandler{kv: kv, stats: stats}
 	r.Register("LPUSH", h.lpush)
 	r.Register("RPUSH", h.rpush)

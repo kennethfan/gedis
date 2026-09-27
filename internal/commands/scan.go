@@ -8,13 +8,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
 // RegisterScan 注册全局 SCAN（HSCAN/SSCAN/ZSCAN 见各类型文件，语义已对齐）。
+var scanMeta = []acl.Meta{
+	{Name: "SCAN", Category: "keyspace", ReadOnly: true, Keys: acl.KeySpec{First: -1}},
+}
+
 func RegisterScan(r *network.Router, kv KV) {
+	for _, m := range scanMeta {
+		acl.RegisterMeta(m)
+	}
 	h := &scanHandler{kv: kv}
 	r.Register("SCAN", h.scan)
 }

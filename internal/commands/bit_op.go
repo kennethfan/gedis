@@ -4,12 +4,20 @@ import (
 	"context"
 	"strings"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
+var bitmapOpMeta = []acl.Meta{
+	{Name: "BITOP", Category: "bitmap", Keys: acl.KeySpec{First: 1, Last: -1}},
+}
+
 func (h *bitmapHandler) registerOp(r *network.Router) {
+	for _, m := range bitmapOpMeta {
+		acl.RegisterMeta(m)
+	}
 	r.Register("BITOP", h.bitop)
 }
 

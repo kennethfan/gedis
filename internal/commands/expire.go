@@ -6,12 +6,26 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
+var expireMeta = []acl.Meta{
+	{Name: "EXPIRE", Category: "keyspace", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "PEXPIRE", Category: "keyspace", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "EXPIREAT", Category: "keyspace", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "PEXPIREAT", Category: "keyspace", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "PERSIST", Category: "keyspace", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "PTTL", Category: "keyspace", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "OBJECT", Category: "keyspace", ReadOnly: true, Keys: acl.KeySpec{Custom: acl.SubKeyAt1}},
+}
+
 func (s *stringHandler) registerExpire(r *network.Router) {
+	for _, m := range expireMeta {
+		acl.RegisterMeta(m)
+	}
 	r.Register("EXPIRE", func(ctx context.Context, args []protocol.Value) protocol.Value {
 		return s.expire(ctx, args, expireRelativeSec)
 	})

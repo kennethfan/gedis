@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
@@ -11,7 +12,16 @@ import (
 )
 
 // RegisterHLL 注册 HyperLogLog 命令；新 hll: 前缀，dense-only。
+var hllMeta = []acl.Meta{
+	{Name: "PFADD", Category: "hyperloglog", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "PFCOUNT", Category: "hyperloglog", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: -1}},
+	{Name: "PFMERGE", Category: "hyperloglog", Keys: acl.KeySpec{First: 0, Last: -1}},
+}
+
 func RegisterHLL(r *network.Router, kv KV) {
+	for _, m := range hllMeta {
+		acl.RegisterMeta(m)
+	}
 	h := &hllHandler{kv: kv}
 	r.Register("PFADD", h.pfadd)
 	r.Register("PFCOUNT", h.pfcount)

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 	"github.com/kennethfan/gedis/internal/sentinel"
@@ -16,7 +17,15 @@ import (
 // RegisterSentinel 在独立哨兵 Router 上注册 SENTINEL/INFO；PING 由
 // DefaultRouter 自带，SUBSCRIBE 由 main.go 另调 RegisterPubSub 挂载。
 // pub 为 nil 时 failover 成功不发射 +switch-master。
+var sentinelMeta = []acl.Meta{
+	{Name: "SENTINEL", Category: "admin", Keys: acl.KeySpec{First: -1}},
+	{Name: "INFO", Category: "dangerous", ReadOnly: true, Keys: acl.KeySpec{First: -1}},
+}
+
 func RegisterSentinel(r *network.Router, reg *sentinel.Registry, selfAddr string, pub *PubSubRegistry) {
+	for _, m := range sentinelMeta {
+		acl.RegisterMeta(m)
+	}
 	h := &sentinelHandler{reg: reg, selfAddr: selfAddr, pub: pub}
 	r.Register("SENTINEL", h.sentinel)
 	r.Register("INFO", h.info)

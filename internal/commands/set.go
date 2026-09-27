@@ -6,13 +6,29 @@ import (
 	"math/rand"
 	"strconv"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
 // RegisterSet 注册基础 set 命令；集合运算与 SSCAN 由 slice3 的 registerOps 追加。
+var setMeta = []acl.Meta{
+	{Name: "SADD", Category: "set", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "SREM", Category: "set", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "SMEMBERS", Category: "set", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "SISMEMBER", Category: "set", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "SMISMEMBER", Category: "set", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "SCARD", Category: "set", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "SPOP", Category: "set", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "SRANDMEMBER", Category: "set", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "SMOVE", Category: "set", Keys: acl.KeySpec{First: 0, Last: 1}},
+}
+
 func RegisterSet(r *network.Router, kv KV) {
+	for _, m := range setMeta {
+		acl.RegisterMeta(m)
+	}
 	h := &setHandler{kv: kv}
 	r.Register("SADD", h.sadd)
 	r.Register("SREM", h.srem)

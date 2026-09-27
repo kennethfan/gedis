@@ -7,11 +7,19 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
+var bitfieldMeta = []acl.Meta{
+	{Name: "BITFIELD", Category: "bitmap", Keys: acl.KeySpec{First: 0, Last: 0}},
+}
+
 func (h *bitmapHandler) registerField(r *network.Router) {
+	for _, m := range bitfieldMeta {
+		acl.RegisterMeta(m)
+	}
 	r.Register("BITFIELD", h.bitfield)
 }
 

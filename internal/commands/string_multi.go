@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
@@ -10,7 +11,16 @@ import (
 )
 
 // registerMulti 注册 MSET/MGET/MSETNX，由 RegisterStrings 调用。
+var stringMultiMeta = []acl.Meta{
+	{Name: "MSET", Category: "string", Keys: acl.KeySpec{First: 0, Last: -1, Step: 2}},
+	{Name: "MGET", Category: "string", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: -1}},
+	{Name: "MSETNX", Category: "string", Keys: acl.KeySpec{First: 0, Last: -1, Step: 2}},
+}
+
 func (s *stringHandler) registerMulti(r *network.Router) {
+	for _, m := range stringMultiMeta {
+		acl.RegisterMeta(m)
+	}
 	r.Register("MSET", s.mset)
 	r.Register("MGET", s.mget)
 	r.Register("MSETNX", s.msetnx)

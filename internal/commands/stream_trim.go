@@ -5,12 +5,20 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
 )
 
+var streamTrimMeta = []acl.Meta{
+	{Name: "XTRIM", Category: "stream", Keys: acl.KeySpec{First: 0, Last: 0}},
+}
+
 func (h *streamHandler) registerTrim(r *network.Router) {
+	for _, m := range streamTrimMeta {
+		acl.RegisterMeta(m)
+	}
 	r.Register("XTRIM", h.xtrim)
 }
 
