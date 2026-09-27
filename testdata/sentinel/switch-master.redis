@@ -1,0 +1,6 @@
+subscribe
++switch-master
+1
+message
++switch-master
+mymaster 127.0.0.1 6480 127.0.0.1 6481

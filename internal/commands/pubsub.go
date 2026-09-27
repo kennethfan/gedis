@@ -306,6 +306,12 @@ func (reg *PubSubRegistry) handlePublish(ctx context.Context, args []protocol.Va
 	}
 	channel := string(args[0].Bulk)
 	payload := args[1]
+	return protocol.Value{Kind: protocol.KindInteger, I: reg.Publish(channel, payload)}
+}
+
+// Publish 向订阅 channel 的会话广播 payload，返回接收者数；与 PUBLISH
+// 命令同语义，供哨兵 failover 发射 +switch-master 等服务端事件用。
+func (reg *PubSubRegistry) Publish(channel string, payload protocol.Value) int64 {
 	reg.mu.Lock()
 	type delivery struct {
 		ch   chan protocol.Value
@@ -346,7 +352,7 @@ func (reg *PubSubRegistry) handlePublish(ctx context.Context, args []protocol.Va
 			d.ch <- m
 		}
 	}
-	return protocol.Value{Kind: protocol.KindInteger, I: count}
+	return count
 }
 
 // emitConfs 按执行路径决定确认数组形状：EXEC 回放返回 FIRST、直写其余；

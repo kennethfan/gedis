@@ -4,11 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"os"
 	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/kennethfan/gedis/internal/cluster"
+	"github.com/kennethfan/gedis/internal/sentinel"
 )
 
 // ErrNotFound is returned when the config file does not exist.
@@ -24,6 +26,7 @@ type Config struct {
 	Metrics     Metrics     `toml:"metrics"`
 	Lua         Lua         `toml:"lua"`
 	Cluster     Cluster     `toml:"cluster"`
+	Sentinel    Sentinel    `toml:"sentinel"`
 }
 
 // Server holds listener settings.
@@ -112,6 +115,69 @@ func (c Cluster) Specs() ([]cluster.NodeSpec, error) {
 	return out, nil
 }
 
+// Sentinel holds 最小发现版哨兵配置（M7 #42）：缺席即关闭；down_after_ms
+// 缺席默认 5000，显式 0 表示只报配置主、不探活；<0 启动报错。
+type Sentinel struct {
+	Enabled     bool             `toml:"enabled"`
+	Port        int              `toml:"port"`
+	DownAfterMs int64            `toml:"down_after_ms"`
+	Masters     []SentinelMaster `toml:"masters"`
+}
+
+// SentinelMaster 是 [[sentinel.masters]] 表：quorum 最小版仅展示（固定 1），
+// 不参与选举判定。
+type SentinelMaster struct {
+	Name       string   `toml:"name"`
+	MasterAddr string   `toml:"master_addr"`
+	Quorum     int      `toml:"quorum"`
+	Slaves     []string `toml:"slaves"`
+}
+
+// DefaultSentinelPort 是哨兵口默认端口（Port==0 时用）。
+const DefaultSentinelPort = 26379
+
+// DefaultSentinelDownAfterMs 是 down_after_ms 缺席时的默认值。
+const DefaultSentinelDownAfterMs = 5000
+
+// Specs 展开全部 masters 为 sentinel.NodeSpec（fail-fast，返回首错）。
+func (s Sentinel) Specs() ([]sentinel.NodeSpec, error) {
+	if s.DownAfterMs < 0 {
+		return nil, fmt.Errorf("sentinel.down_after_ms must be >= 0, got %d", s.DownAfterMs)
+	}
+	seen := make(map[string]struct{}, len(s.Masters))
+	var out []sentinel.NodeSpec
+	for _, m := range s.Masters {
+		if m.Name == "" {
+			return nil, fmt.Errorf("sentinel master name must not be empty")
+		}
+		if _, dup := seen[m.Name]; dup {
+			return nil, fmt.Errorf("sentinel master %q duplicated", m.Name)
+		}
+		seen[m.Name] = struct{}{}
+		if err := checkHostPort(m.MasterAddr); err != nil {
+			return nil, fmt.Errorf("sentinel master %q: %w", m.Name, err)
+		}
+		if len(m.Slaves) == 0 {
+			return nil, fmt.Errorf("sentinel master %q: slaves must not be empty", m.Name)
+		}
+		for _, sl := range m.Slaves {
+			if err := checkHostPort(sl); err != nil {
+				return nil, fmt.Errorf("sentinel master %q: %w", m.Name, err)
+			}
+		}
+		out = append(out, sentinel.NodeSpec{Name: m.Name, MasterAddr: m.MasterAddr, Slaves: m.Slaves})
+	}
+	return out, nil
+}
+
+func checkHostPort(addr string) error {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host == "" || port == "" {
+		return fmt.Errorf("invalid addr %q", addr)
+	}
+	return nil
+}
+
 // Load parses the TOML file at path into a Config.
 func Load(path string) (Config, error) {
 	data, err := os.ReadFile(path)
@@ -122,8 +188,12 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("read %s: %w", path, err)
 	}
 	var cfg Config
-	if err := toml.Unmarshal(data, &cfg); err != nil {
+	md, err := toml.Decode(string(data), &cfg)
+	if err != nil {
 		return Config{}, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if md.IsDefined("sentinel") && !md.IsDefined("sentinel", "down_after_ms") {
+		cfg.Sentinel.DownAfterMs = DefaultSentinelDownAfterMs
 	}
 	return cfg, nil
 }
