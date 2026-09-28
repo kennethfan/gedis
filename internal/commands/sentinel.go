@@ -228,6 +228,18 @@ func (h *sentinelHandler) isMasterDownByAddr(rest []protocol.Value) protocol.Val
 	if !ok {
 		return errValueStr("ERR syntax error")
 	}
+	epochStr, ok := argString(rest[2])
+	if !ok {
+		return errValueStr("ERR syntax error")
+	}
+	candEpoch, err := strconv.ParseUint(epochStr, 10, 64)
+	if err != nil {
+		return errValueStr("ERR invalid epoch")
+	}
+	candRunID, ok := argString(rest[3])
+	if !ok {
+		return errValueStr("ERR syntax error")
+	}
 	addr := net.JoinHostPort(ip, port)
 	name := ""
 	for _, n := range h.reg.Names() {
@@ -244,7 +256,14 @@ func (h *sentinelHandler) isMasterDownByAddr(rest []protocol.Value) protocol.Val
 	if h.reg.IsSubjectivelyDown(addr) {
 		flag = "1"
 	}
-	return protocol.ArrayOf(protocol.BulkOf(flag), protocol.BulkOf("*"), protocol.BulkOf("0"))
+	granted, epoch := h.reg.HandleVote(name, candEpoch, candRunID)
+	leaderRunID, leaderEpoch := "*", "0"
+	if granted {
+		leaderRunID, leaderEpoch = candRunID, strconv.FormatUint(epoch, 10)
+	} else if votedRunID, votedEpoch, found := h.reg.VotedFor(name); found && votedRunID != "" {
+		leaderRunID, leaderEpoch = votedRunID, strconv.FormatUint(votedEpoch, 10)
+	}
+	return protocol.ArrayOf(protocol.BulkOf(flag), protocol.BulkOf(leaderRunID), protocol.BulkOf(leaderEpoch))
 }
 
 func (h *sentinelHandler) info(_ context.Context, args []protocol.Value) protocol.Value {

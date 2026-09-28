@@ -23,11 +23,14 @@ var ErrNoHealthySlave = errors.New("sentinel: no healthy slave")
 const replicaofTimeout = 2 * time.Second
 
 type masterState struct {
-	spec       NodeSpec
-	current    string
-	down       map[string]bool
-	sdownCount map[string]int
-	failMu     sync.Mutex
+	spec         NodeSpec
+	current      string
+	down         map[string]bool
+	sdownCount   map[string]int
+	currentEpoch uint64
+	votedEpoch   uint64
+	votedRunID   string
+	failMu       sync.Mutex
 }
 
 // Registry 是静态 masters 注册表：master 名 → 主地址/slaves 列表/
