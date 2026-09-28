@@ -23,10 +23,11 @@ var ErrNoHealthySlave = errors.New("sentinel: no healthy slave")
 const replicaofTimeout = 2 * time.Second
 
 type masterState struct {
-	spec    NodeSpec
-	current string
-	down    map[string]bool
-	failMu  sync.Mutex
+	spec       NodeSpec
+	current    string
+	down       map[string]bool
+	sdownCount map[string]int
+	failMu     sync.Mutex
 }
 
 // Registry 是静态 masters 注册表：master 名 → 主地址/slaves 列表/
@@ -41,7 +42,7 @@ type Registry struct {
 func NewRegistry(specs []NodeSpec, downAfter time.Duration) *Registry {
 	r := &Registry{masters: make(map[string]*masterState, len(specs)), downAfter: downAfter}
 	for _, s := range specs {
-		r.masters[s.Name] = &masterState{spec: s, current: s.MasterAddr, down: make(map[string]bool)}
+		r.masters[s.Name] = &masterState{spec: s, current: s.MasterAddr, down: make(map[string]bool), sdownCount: make(map[string]int)}
 	}
 	return r
 }
