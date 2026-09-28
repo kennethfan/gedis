@@ -77,6 +77,11 @@ func (h *sentinelHandler) sentinel(_ context.Context, args []protocol.Value) pro
 			return sentinelArgErr(sub)
 		}
 		return h.failover(rest)
+	case "IS-MASTER-DOWN-BY-ADDR":
+		if len(rest) != 4 {
+			return sentinelArgErr(sub)
+		}
+		return h.isMasterDownByAddr(rest)
 	case "RESET", "REMOVE", "SET":
 		return errValueStr("ERR Static sentinel topology does not support SENTINEL " + strings.ToUpper(sub))
 	case "FLUSHCONFIG":
@@ -127,7 +132,7 @@ func (h *sentinelHandler) masterEntry(name, addr string) protocol.Value {
 		protocol.BulkOf("name"), protocol.BulkOf(name),
 		protocol.BulkOf("ip"), protocol.BulkOf(host),
 		protocol.BulkOf("port"), protocol.BulkOf(port),
-		protocol.BulkOf("quorum"), protocol.BulkOf("1"),
+		protocol.BulkOf("quorum"), protocol.BulkOf(strconv.Itoa(h.reg.Quorum(name))),
 		protocol.BulkOf("down-after-milliseconds"), protocol.BulkOf(strconv.FormatInt(h.reg.DownAfterMs(), 10)),
 		protocol.BulkOf("flags"), protocol.BulkOf(flags),
 	)
@@ -212,6 +217,34 @@ func (h *sentinelHandler) failover(rest []protocol.Value) protocol.Value {
 			fmt.Sprintf("%s %s %d %s %d", name, oldHost, oldPort, newHost, newPort)))
 	}
 	return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
+}
+
+func (h *sentinelHandler) isMasterDownByAddr(rest []protocol.Value) protocol.Value {
+	ip, ok := argString(rest[0])
+	if !ok {
+		return errValueStr("ERR syntax error")
+	}
+	port, ok := argString(rest[1])
+	if !ok {
+		return errValueStr("ERR syntax error")
+	}
+	addr := net.JoinHostPort(ip, port)
+	name := ""
+	for _, n := range h.reg.Names() {
+		host, p, found := h.reg.GetMasterAddr(n)
+		if found && host == ip && strconv.Itoa(p) == port {
+			name = n
+			break
+		}
+	}
+	if name == "" {
+		return errValueStr("ERR No such master with that address")
+	}
+	flag := "0"
+	if h.reg.IsSubjectivelyDown(addr) {
+		flag = "1"
+	}
+	return protocol.ArrayOf(protocol.BulkOf(flag), protocol.BulkOf("*"), protocol.BulkOf("0"))
 }
 
 func (h *sentinelHandler) info(_ context.Context, args []protocol.Value) protocol.Value {
