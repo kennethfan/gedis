@@ -153,6 +153,11 @@ func (s Sentinel) Specs() ([]sentinel.NodeSpec, error) {
 	if s.DownAfterMs < 0 {
 		return nil, fmt.Errorf("sentinel.down_after_ms must be >= 0, got %d", s.DownAfterMs)
 	}
+	for _, seed := range s.Sentinels {
+		if err := checkHostPort(seed); err != nil {
+			return nil, fmt.Errorf("sentinel seed %q: %w", seed, err)
+		}
+	}
 	seen := make(map[string]struct{}, len(s.Masters))
 	var out []sentinel.NodeSpec
 	for _, m := range s.Masters {

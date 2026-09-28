@@ -183,10 +183,15 @@ func run() error {
 		sentinelSelf := fmt.Sprintf("%s:%d", cfg.Server.Host, sentinelPort)
 		sentinelReg := sentinel.NewRegistry(specs, time.Duration(cfg.Sentinel.DownAfterMs)*time.Millisecond)
 		sentinelStop = make(chan struct{})
-		sentinelReg.StartProbeLoop(sentinelStop)
+		go sentinelReg.StartProbeLoop(sentinelStop)
 		sRouter := network.DefaultRouter()
 		sentinelPub := commands.RegisterPubSub(sRouter)
 		commands.RegisterSentinel(sRouter, sentinelReg, sentinelSelf, sentinelPub)
+		sentinelReg.Peers.SeedPeers(cfg.Sentinel.Sentinels)
+		runSentinelLoops(sentinelReg, sentinelSelf, sentinel.NewRunID(),
+			time.Duration(cfg.Sentinel.DownAfterMs)*time.Millisecond,
+			time.Duration(cfg.Sentinel.FailoverTimeoutMs)*time.Millisecond,
+			sentinelPub, sentinelStop)
 		sentinelSrv = network.NewServer(sRouter)
 		sentinelSrv.OnConnClose(func(c net.Conn) {
 			sentinelPub.ConnClosed(c)
@@ -212,6 +217,7 @@ func run() error {
 	})
 	exp := commands.NewExpirer(store, stats)
 	exp.Start()
+	defer exp.Stop() // 早退路径（监听失败等）先停清扫再关存储，防 SweepOnce 扫已关 DB panic
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	ln, err := net.Listen("tcp", addr)

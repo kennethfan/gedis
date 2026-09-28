@@ -117,3 +117,11 @@ func TestSentinelLoad_DownAfterDefault(t *testing.T) {
 		t.Fatalf("explicit down_after_ms=0: got %d, want 0", cfg2.Sentinel.DownAfterMs)
 	}
 }
+
+func TestSentinelSpecs_BadSeedFails(t *testing.T) {
+	cfg := Sentinel{Sentinels: []string{"not-an-addr"},
+		Masters: []SentinelMaster{{Name: "m", MasterAddr: "127.0.0.1:6380", Quorum: 1, Slaves: []string{"127.0.0.1:6381"}}}}
+	if _, err := cfg.Specs(); err == nil {
+		t.Fatal("expect bad seed addr error")
+	}
+}

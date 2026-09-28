@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -80,6 +81,18 @@ func (p *PeerTable) Addrs() []string {
 		out = append(out, h.IP+":"+h.Port)
 	}
 	return out
+}
+
+// SeedPeers 把种子哨兵地址记为占位对端（RunID 暂用 addr 本身）；
+// gossip 到真实 hello 后同地址会有双条目，调用方去重。非法地址忽略。
+func (p *PeerTable) SeedPeers(addrs []string) {
+	for _, a := range addrs {
+		h, port, err := net.SplitHostPort(a)
+		if err != nil || h == "" || port == "" {
+			continue
+		}
+		p.Upsert(Hello{IP: h, Port: port, RunID: a})
+	}
 }
 
 // NewRunID 生成本哨兵的 16 字节 crypto/rand hex 运行标识。

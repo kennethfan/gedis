@@ -3,6 +3,7 @@ package sentinel
 import (
 	"fmt"
 	"net"
+	"strconv"
 	"time"
 
 	"github.com/kennethfan/gedis/internal/protocol"
@@ -30,15 +31,17 @@ func (r *Registry) InCooldown(name string, timeout time.Duration) bool {
 	return time.Since(st.lastFailover) < timeout
 }
 
-// AutoTick 是自动转移单步：非 leader 直接 nil；ODOWN 不成立直接
-// nil；冷却中直接 nil；选从失败（无健康从）返回 ErrNoHealthySlave
-// 且不翻转当前主（abort）；成功则 failoverTo 并经 pub 发射
-// +switch-master（pub 为 nil 时跳过发射）。
-func (r *Registry) AutoTick(name string, isLeader bool, infos []SlaveInfo, timeout time.Duration, pub Publisher) error {
+// AutoTick 是自动转移单步：非 leader 直接 nil；ODOWN（含 peerDowns
+// 票）不成立直接 nil；冷却中直接 nil；选从失败（无健康从）返回
+// ErrNoHealthySlave 且不翻转当前主（abort）；目标即当前主时短路
+// nil（不发 REPLICAOF、不记 lastFailover）；目标已是 master（他哨兵
+// 先切换）时收养并中止；成功则 failoverTo 并经 pub 发射 +switch-master
+// （pub 为 nil 时跳过发射）。
+func (r *Registry) AutoTick(name string, isLeader bool, peerDowns int, infos []SlaveInfo, timeout time.Duration, pub Publisher) error {
 	if !isLeader {
 		return nil
 	}
-	if !r.IsObjectivelyDown(name, 0) {
+	if !r.IsObjectivelyDown(name, peerDowns) {
 		return nil
 	}
 	if r.InCooldown(name, timeout) {
@@ -47,6 +50,13 @@ func (r *Registry) AutoTick(name string, isLeader bool, infos []SlaveInfo, timeo
 	target, err := r.SelectSlave(name, infos)
 	if err != nil {
 		return err
+	}
+	if ch, cp, ok := r.GetMasterAddr(name); ok && net.JoinHostPort(ch, strconv.Itoa(cp)) == target {
+		return nil
+	}
+	if role, err := FetchRole(target); err == nil && role == "master" {
+		r.ObserveMaster(name, target)
+		return nil
 	}
 	oldHost, oldPort, _ := r.GetMasterAddr(name)
 	if err := r.failoverTo(name, target); err != nil {

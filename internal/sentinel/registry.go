@@ -140,6 +140,7 @@ func (r *Registry) SetDown(addr string, down bool) {
 // Failover 对 name 执行一次手动切换：选首个非 down slave 并调
 // failoverTo（提升+降旧主+翻缓存+记 lastFailover）。
 // 无健康 slave 时 abort：不翻转当前主，不发送 REPLICAOF。
+// 目标即当前主时短路 nil（幂等，不记 lastFailover）。
 func (r *Registry) Failover(name string) error {
 	r.mu.RLock()
 	st, found := r.masters[name]
@@ -165,6 +166,9 @@ func (r *Registry) Failover(name string) error {
 	}
 	if target == "" {
 		return ErrNoHealthySlave
+	}
+	if ch, cp, ok := r.GetMasterAddr(name); ok && net.JoinHostPort(ch, strconv.Itoa(cp)) == target {
+		return nil
 	}
 	return r.failoverTo(name, target)
 }
