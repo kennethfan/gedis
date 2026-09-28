@@ -39,11 +39,13 @@ type Registry struct {
 	mu        sync.RWMutex
 	masters   map[string]*masterState
 	downAfter time.Duration
+	// Peers 是 gossip 发现的对端哨兵表；NewRegistry 初始化为空表。
+	Peers *PeerTable
 }
 
 // NewRegistry 由校验过的 specs 构造注册表；当前主初始为配置主。
 func NewRegistry(specs []NodeSpec, downAfter time.Duration) *Registry {
-	r := &Registry{masters: make(map[string]*masterState, len(specs)), downAfter: downAfter}
+	r := &Registry{masters: make(map[string]*masterState, len(specs)), downAfter: downAfter, Peers: NewPeerTable()}
 	for _, s := range specs {
 		r.masters[s.Name] = &masterState{spec: s, current: s.MasterAddr, down: make(map[string]bool), sdownCount: make(map[string]int)}
 	}

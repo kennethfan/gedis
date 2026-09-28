@@ -173,12 +173,22 @@ func (h *sentinelHandler) sentinels(rest []protocol.Value) protocol.Value {
 		return errValueStr("ERR No such master with that name")
 	}
 	host, port, _ := net.SplitHostPort(h.selfAddr)
-	return protocol.ArrayOf(protocol.ArrayOf(
+	out := []protocol.Value{protocol.ArrayOf(
 		protocol.BulkOf("name"), protocol.BulkOf(h.selfAddr),
 		protocol.BulkOf("ip"), protocol.BulkOf(host),
 		protocol.BulkOf("port"), protocol.BulkOf(port),
 		protocol.BulkOf("flags"), protocol.BulkOf("sentinel"),
-	))
+	)}
+	for _, addr := range h.reg.Peers.Addrs() {
+		ph, pp, _ := net.SplitHostPort(addr)
+		out = append(out, protocol.ArrayOf(
+			protocol.BulkOf("name"), protocol.BulkOf(addr),
+			protocol.BulkOf("ip"), protocol.BulkOf(ph),
+			protocol.BulkOf("port"), protocol.BulkOf(pp),
+			protocol.BulkOf("flags"), protocol.BulkOf("sentinel"),
+		))
+	}
+	return protocol.ArrayOf(out...)
 }
 
 func (h *sentinelHandler) getMasterAddr(rest []protocol.Value) protocol.Value {
