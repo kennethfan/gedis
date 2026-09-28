@@ -29,8 +29,7 @@ func TestAdoptMaster_StaleOrUnattributed(t *testing.T) {
 	}
 }
 
-func TestObserveMaster_Unconditional(t *testing.T) {
-	r := NewRegistry([]NodeSpec{{Name: "m", MasterAddr: "127.0.0.1:6380", Slaves: []string{"127.0.0.1:6381"}, Quorum: 1}}, 0)
+func TestObserveMaster_Unconditional(t *testing.T) {	r := NewRegistry([]NodeSpec{{Name: "m", MasterAddr: "127.0.0.1:6380", Slaves: []string{"127.0.0.1:6381"}, Quorum: 1}}, 0)
 	if !r.ObserveMaster("m", "127.0.0.1:6381") {
 		t.Fatal("must adopt observed master")
 	}
@@ -39,5 +38,23 @@ func TestObserveMaster_Unconditional(t *testing.T) {
 	}
 	if r.ObserveMaster("nope", "127.0.0.1:6381") {
 		t.Fatal("unknown master must not adopt")
+	}
+}
+
+func TestFindPromotedMaster_FindsOther(t *testing.T) {
+	masterStub := startPeerStub(t, "$33\r\nrole:master\r\nconnected_slaves:0\r\n\r\n")
+	slaveStub := startPeerStub(t, "$58\r\nrole:slave\r\nmaster_link_status:up\r\nslave_repl_offset:99\r\n\r\n")
+	r := NewRegistry([]NodeSpec{{Name: "m", MasterAddr: "127.0.0.1:6380", Slaves: []string{slaveStub, masterStub}, Quorum: 1}}, 0)
+	got, ok := r.FindPromotedMaster("m", []string{slaveStub, masterStub})
+	if !ok || got != masterStub {
+		t.Fatalf("must find already-promoted master, got %q,%v", got, ok)
+	}
+}
+
+func TestFindPromotedMaster_NoneWhenAllSlaves(t *testing.T) {
+	slaveStub := startPeerStub(t, "$58\r\nrole:slave\r\nmaster_link_status:up\r\nslave_repl_offset:99\r\n\r\n")
+	r := NewRegistry([]NodeSpec{{Name: "m", MasterAddr: "127.0.0.1:6380", Slaves: []string{slaveStub}, Quorum: 1}}, 0)
+	if got, ok := r.FindPromotedMaster("m", []string{slaveStub}); ok {
+		t.Fatalf("no master among slaves must report none, got %q", got)
 	}
 }

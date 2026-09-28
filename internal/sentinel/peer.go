@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kennethfan/gedis/internal/protocol"
@@ -99,8 +100,29 @@ func FetchHello(peerAddr string, timeout time.Duration) (Hello, error) {
 	return Hello{}, fmt.Errorf("sentinel: no hello from %s", peerAddr)
 }
 
-func splitLines(s string) []string {
-	var out []string
+// parseSlaveSideInfo 解析从节点自身 INFO replication：role 非 slave
+// 即非候选（多半是已被提升的新主，返回 false 交上层决策）；offset 取
+// slave_repl_offset；gedis INFO 无 slave_priority 字段，Priority 恒 100；
+// 可达即记 State online（gedis 的 master_link_status 硬编码 up，不可信）。
+func parseSlaveSideInfo(addr, infoOut string) (SlaveInfo, bool) {
+	si := SlaveInfo{Addr: addr, Priority: 100}
+	fields := map[string]string{}
+	for _, line := range splitLines(infoOut) {
+		if k, v, ok := strings.Cut(strings.TrimSpace(line), ":"); ok {
+			fields[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		}
+	}
+	if fields["role"] != "slave" {
+		return si, false
+	}
+	if off, err := strconv.ParseInt(fields["slave_repl_offset"], 10, 64); err == nil {
+		si.Offset = off
+	}
+	si.State = "online"
+	return si, true
+}
+
+func splitLines(s string) []string {	var out []string
 	start := 0
 	for i := 0; i < len(s); i++ {
 		if s[i] == '\n' {
@@ -126,19 +148,35 @@ func cutPrefix(s, pre string) (string, bool) {
 	return s[len(pre):], true
 }
 
-// FetchSlaveInfos 拉取 master 的 INFO replication 并为每个 slave
-// 产出 SlaveInfo（无条目者保留 Priority:100 缺席默认）。
+// FetchSlaveInfos 汇总每个 slave 的 SlaveInfo：先尽力拉 master 的 INFO
+// replication（slaveN 行匹配，自动转移时主已死通常拉不到），再逐个直连
+// 活着的 slave 取其自身 INFO（slave_repl_offset 为准），合并后按 Slaves
+// 顺序返回；均拉不到者保留 Priority:100 缺席默认。master 与各从
+// 任一不可达都不再整体报错（调用方照常用 SelectSlave 决策）。
 func FetchSlaveInfos(masterAddr string, slaves []string) ([]SlaveInfo, error) {
-	v, err := sendCmd(masterAddr, "INFO", "replication")
-	if err != nil {
-		return nil, err
-	}
-	if v.Kind != protocol.KindBulkString {
-		return nil, fmt.Errorf("sentinel: INFO replication: bad reply kind %d", v.Kind)
+	byAddr := make(map[string]SlaveInfo, len(slaves))
+	if v, err := sendCmd(masterAddr, "INFO", "replication"); err == nil && v.Kind == protocol.KindBulkString {
+		for _, addr := range slaves {
+			byAddr[addr] = ParseSlaveInfo(addr, string(v.Bulk))
+		}
 	}
 	out := make([]SlaveInfo, 0, len(slaves))
 	for _, addr := range slaves {
-		out = append(out, ParseSlaveInfo(addr, string(v.Bulk)))
+		if v, err := sendCmd(addr, "INFO", "replication"); err == nil && v.Kind == protocol.KindBulkString {
+			if si, ok := parseSlaveSideInfo(addr, string(v.Bulk)); ok {
+				if base, has := byAddr[addr]; has {
+					if si.RunID == "" {
+						si.RunID = base.RunID
+					}
+				}
+				byAddr[addr] = si
+			}
+		}
+		if si, ok := byAddr[addr]; ok {
+			out = append(out, si)
+		} else {
+			out = append(out, SlaveInfo{Addr: addr, Priority: 100})
+		}
 	}
 	return out, nil
 }

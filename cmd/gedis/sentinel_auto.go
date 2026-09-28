@@ -105,6 +105,11 @@ func autoStep(reg *sentinel.Registry, name, runID string, peers []string, timeou
 	if !odown || reg.InCooldown(name, timeout) {
 		return
 	}
+	slaves, _ := reg.Slaves(name)
+	if promoted, ok := reg.FindPromotedMaster(name, slaves); ok {
+		reg.ObserveMaster(name, promoted)
+		return
+	}
 	pub.Publish("+try-failover", protocol.BulkOf(fmt.Sprintf("master %s %s %d", name, curHost, curPort)))
 	time.Sleep(time.Duration(100+rand.IntN(300)) * time.Millisecond)
 	downs2, grants2 := voteRound(reg, name, curHost, curPort, cand, runID, peers)
@@ -115,7 +120,6 @@ func autoStep(reg *sentinel.Registry, name, runID string, peers []string, timeou
 		return
 	}
 	pub.Publish("+elected-leader", protocol.BulkOf(fmt.Sprintf("master %s %s %d", name, curHost, curPort)))
-	slaves, _ := reg.Slaves(name)
 	var infos []sentinel.SlaveInfo
 	if fetched, err := sentinel.FetchSlaveInfos(curAddr, slaves); err == nil {
 		infos = fetched

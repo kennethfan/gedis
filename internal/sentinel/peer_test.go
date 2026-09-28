@@ -75,6 +75,27 @@ func TestFetchSlaveInfos_Parses(t *testing.T) {
 	}
 }
 
+func TestFetchSlaveInfos_SlaveSideOffset(t *testing.T) {
+	slaveInfo := "role:slave\r\nmaster_host:127.0.0.1\r\nmaster_port:6380\r\nmaster_link_status:up\r\nslave_repl_offset:2048\r\n"
+	slave := startPeerStub(t, fmt.Sprintf("$%d\r\n%s\r\n", len(slaveInfo), slaveInfo))
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadMaster := ln.Addr().String()
+	_ = ln.Close()
+	infos, err := FetchSlaveInfos(deadMaster, []string{slave})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 1 {
+		t.Fatalf("got %v", infos)
+	}
+	if infos[0].Offset != 2048 || infos[0].State != "online" {
+		t.Fatalf("slave-side offset must win when master is down, got %+v", infos[0])
+	}
+}
+
 func TestFetchRole_Master(t *testing.T) {
 	info := "# Replication\r\nrole:master\r\nconnected_slaves:0\r\n"
 	addr := startPeerStub(t, fmt.Sprintf("$%d\r\n%s\r\n", len(info), info))
