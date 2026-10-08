@@ -44,7 +44,8 @@ func wireMainRouter(t *testing.T) *network.Router {
 	RegisterCluster(r, store, cluster.NewTopology(false, nil), NewAskRegistry())
 	st := acl.NewStore()
 	reg := RegisterAuth(r, st)
-	RegisterConn(r, st, reg)
+	connReg := RegisterConn(r, st, reg)
+	RegisterServer(r, store, stats, hub, connReg, ServerDeps{})
 	RegisterACL(r, st, reg, nil)
 	return r
 }

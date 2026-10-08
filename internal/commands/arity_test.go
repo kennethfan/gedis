@@ -29,7 +29,8 @@ func Test_CommandArityCoversRouter(t *testing.T) {
 	RegisterWriteCommands(r)
 	RegisterTxn(r, hub)
 	st := acl.NewStore()
-	RegisterConn(r, st, RegisterAuth(r, st))
+	connReg := RegisterConn(r, st, RegisterAuth(r, st))
+	RegisterServer(r, store, stats, hub, connReg, ServerDeps{})
 	table := CommandArity()
 	for _, name := range r.Commands() {
 		_, ok := table[name]

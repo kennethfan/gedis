@@ -210,7 +210,30 @@ func (s *stringHandler) object(ctx context.Context, args []protocol.Value) proto
 		return errValueStr("ERR wrong number of arguments for 'object' command")
 	}
 	sub, ok := argString(args[0])
-	if !ok || strings.ToUpper(sub) != "ENCODING" {
+	if !ok {
+		return errValueStr("ERR syntax error")
+	}
+	// REFCOUNT/IDLETIME/FREQ：本引擎无引用计数与访问时钟跟踪，
+	// 回恒定占位（1/0/0）并文档注明；LFU 真值等 Phase 9 补齐。
+	switch strings.ToUpper(sub) {
+	case "REFCOUNT", "IDLETIME", "FREQ":
+		key, ok := argString(args[1])
+		if !ok {
+			return errValueStr("ERR invalid key")
+		}
+		if _, err := s.getAny(ctx, key); err != nil {
+			if isNotFound(err) {
+				return protocol.Value{Kind: protocol.KindBulkString}
+			}
+			return errValue(err)
+		}
+		if strings.EqualFold(sub, "REFCOUNT") {
+			return protocol.Value{Kind: protocol.KindInteger, I: 1}
+		}
+		return protocol.Value{Kind: protocol.KindInteger, I: 0}
+	case "ENCODING":
+		break
+	default:
 		return errValueStr("ERR syntax error")
 	}
 	key, ok := argString(args[1])
@@ -224,35 +247,42 @@ func (s *stringHandler) object(ctx context.Context, args []protocol.Value) proto
 		}
 		return errValue(err)
 	}
-	if e.Type == datastruct.TypeHash {
-		if len(e.Payload) > 0 && e.Payload[0] == datastruct.EncodingHashtable {
-			return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte("hashtable")}
-		}
-		return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte("listpack")}
-	}
-	if e.Type == datastruct.TypeList {
-		if len(e.Payload) > 0 && e.Payload[0] == datastruct.ListEncodingQuicklist {
-			return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte("quicklist")}
-		}
-		return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte("ziplist")}
-	}
-	if e.Type == datastruct.TypeSet {
-		if len(e.Payload) > 0 && e.Payload[0] == datastruct.EncodingIntset {
-			return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte("intset")}
-		}
-		return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte("hashtable")}
-	}
-	if e.Type == datastruct.TypeZSet {
-		if len(e.Payload) > 0 && e.Payload[0] == datastruct.ZSetEncodingSkiplist {
-			return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte("skiplist")}
-		}
-		return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte("listpack")}
-	}
-	if e.Type != datastruct.TypeString {
+	enc, ok := objectEncodingOf(e)
+	if !ok {
 		return errValueStr("ERR OBJECT ENCODING not supported for this type")
 	}
-	if len(e.Payload) <= 44 {
-		return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte("embstr")}
+	return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte(enc)}
+}
+
+// objectEncodingOf 返回 entry 的编码名；未覆盖类型回 ok=false。
+func objectEncodingOf(e datastruct.Entry) (string, bool) {
+	switch e.Type {
+	case datastruct.TypeHash:
+		if len(e.Payload) > 0 && e.Payload[0] == datastruct.EncodingHashtable {
+			return "hashtable", true
+		}
+		return "listpack", true
+	case datastruct.TypeList:
+		if len(e.Payload) > 0 && e.Payload[0] == datastruct.ListEncodingQuicklist {
+			return "quicklist", true
+		}
+		return "ziplist", true
+	case datastruct.TypeSet:
+		if len(e.Payload) > 0 && e.Payload[0] == datastruct.EncodingIntset {
+			return "intset", true
+		}
+		return "hashtable", true
+	case datastruct.TypeZSet:
+		if len(e.Payload) > 0 && e.Payload[0] == datastruct.ZSetEncodingSkiplist {
+			return "skiplist", true
+		}
+		return "listpack", true
+	case datastruct.TypeString:
+		if len(e.Payload) <= 44 {
+			return "embstr", true
+		}
+		return "raw", true
+	default:
+		return "", false
 	}
-	return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte("raw")}
 }

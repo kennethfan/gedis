@@ -186,6 +186,15 @@ func run() error {
 	}
 	authReg := commands.RegisterAuth(router, aclStore)
 	connReg := commands.RegisterConn(router, aclStore, authReg)
+	var shutdownFunc func()
+	commands.RegisterServer(router, store, stats, hub, connReg, commands.ServerDeps{
+		StartUnix: time.Now().Unix(),
+		Shutdown: func() {
+			if shutdownFunc != nil {
+				shutdownFunc()
+			}
+		},
+	})
 	var aclSaver commands.ACLSaver
 	if cfg.ACLFile != "" {
 		aclSaver = func() error { return acl.Save(cfg.ACLFile, aclStore) }
@@ -242,6 +251,10 @@ func run() error {
 	})
 	exp := commands.NewExpirer(store, stats)
 	exp.Start()
+	shutdownFunc = func() {
+		exp.Stop()
+		_ = srv.Close()
+	}
 	defer exp.Stop() // 早退路径（监听失败等）先停清扫再关存储，防 SweepOnce 扫已关 DB panic
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

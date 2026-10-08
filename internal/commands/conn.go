@@ -26,19 +26,29 @@ var connMeta = []acl.Meta{
 	{Name: "COMMAND", Category: "connection", Keys: acl.KeySpec{First: -1}},
 }
 
-// ConnState 是单连接的可变状态：RESP 协议版本与连接名。
+// ConnState 是单连接的可变状态：RESP 协议版本、连接名与自增序号。
 // 读写只发生在该连接的 handler goroutine（server 每连接单 goroutine），
 // 但测试与关闭路径并发触碰，故仍加锁。
 type ConnState struct {
+	ID    int64
 	Proto int
 	Name  string
+}
+
+// ConnInfo 是 CLIENT LIST 用的连接快照行。
+type ConnInfo struct {
+	ID    int64
+	Addr  string
+	Name  string
+	Proto int
 }
 
 // ConnRegistry 按连接存 ConnState（仿 AuthRegistry conn-keyed 模式，
 // main.go 经 OnConnClose 清理）。
 type ConnRegistry struct {
-	mu sync.Mutex
-	m  map[net.Conn]*ConnState
+	mu     sync.Mutex
+	m      map[net.Conn]*ConnState
+	nextID int64
 }
 
 func NewConnRegistry() *ConnRegistry {
@@ -48,10 +58,33 @@ func NewConnRegistry() *ConnRegistry {
 func (c *ConnRegistry) state(conn net.Conn) *ConnState {
 	st, ok := c.m[conn]
 	if !ok {
-		st = &ConnState{Proto: 2}
+		c.nextID++
+		st = &ConnState{ID: c.nextID, Proto: 2}
 		c.m[conn] = st
 	}
 	return st
+}
+
+// IDOf 返回连接的序号（CLIENT ID 用）；无记录（单测直调）默认建号。
+func (c *ConnRegistry) IDOf(conn net.Conn) int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.state(conn).ID
+}
+
+// Snapshot 返回全部存活连接的快照（CLIENT LIST 用）。
+func (c *ConnRegistry) Snapshot() []ConnInfo {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]ConnInfo, 0, len(c.m))
+	for conn, st := range c.m {
+		addr := ""
+		if conn != nil && conn.RemoteAddr() != nil {
+			addr = conn.RemoteAddr().String()
+		}
+		out = append(out, ConnInfo{ID: st.ID, Addr: addr, Name: st.Name, Proto: st.Proto})
+	}
+	return out
 }
 
 func (c *ConnRegistry) SetProto(conn net.Conn, ver int) {
@@ -296,6 +329,11 @@ func (h *connHandler) command(ctx context.Context, args []protocol.Value) protoc
 			names = append(names, s)
 		}
 		return h.commandInfo(names)
+	case "DOCS":
+		if len(args) != 1 {
+			return errValueStr("ERR wrong number of arguments for 'command|docs' command")
+		}
+		return h.commandDocs()
 	case "GETKEYS":
 		if len(args) < 2 {
 			return errValueStr("ERR wrong number of arguments for 'command|getkeys' command")
@@ -328,8 +366,7 @@ func (h *connHandler) command(ctx context.Context, args []protocol.Value) protoc
 }
 
 // commandInfo 生成 COMMAND INFO 条目：nil 表全部（按名排序保证确定性），
-// 否则按给定名逐个（未知名给 null，与真机一致）。DOCS 在 Phase 2 交付前走
-// 上方 default 的 unknown-subcommand 诚实报错。
+// 否则按给定名逐个（未知名给 null，与真机一致）。
 func (h *connHandler) commandInfo(names []string) protocol.Value {
 	all := names == nil
 	if all {
@@ -377,4 +414,33 @@ func commandEntry(name string) protocol.Value {
 		{Kind: protocol.KindInteger, I: step},
 		{Kind: protocol.KindArray, Elems: cats},
 	}}
+}
+
+// commandDocs 生成 COMMAND DOCS 条目：每条 [小写名, 字段平铺数组]，
+// 字段取自 acl 元数据与 arity 表（结构子集，无逐命令文档文本）。
+func (h *connHandler) commandDocs() protocol.Value {
+	names := h.router.Commands()
+	sort.Strings(names)
+	out := make([]protocol.Value, 0, len(names))
+	for _, n := range names {
+		upper := strings.ToUpper(n)
+		m, ok := acl.LookupMeta(upper)
+		if !ok {
+			continue
+		}
+		arity := 0
+		if a, ok := commandArity[upper]; ok {
+			arity = a
+		}
+		fields := []protocol.Value{
+			protocol.BulkOf("summary"), protocol.BulkOf(""),
+			protocol.BulkOf("arity"), {Kind: protocol.KindInteger, I: int64(arity)},
+			protocol.BulkOf("group"), protocol.BulkOf(m.Category),
+		}
+		out = append(out, protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
+			protocol.BulkOf(strings.ToLower(n)),
+			{Kind: protocol.KindArray, Elems: fields},
+		}})
+	}
+	return protocol.Value{Kind: protocol.KindArray, Elems: out}
 }
