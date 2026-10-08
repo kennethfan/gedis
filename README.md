@@ -117,9 +117,9 @@ make vet     # Static checks
 make bench   # Benchmarks
 ```
 
-## Scope (not in v1)
+## Scope (not yet implemented)
 
-TLS (encryption in transit).
+Server-side TLS listener (outbound dial-side TLS follows `[tls]` config via `tlsdial`).
 
 ## License
 
