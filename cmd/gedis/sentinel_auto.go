@@ -24,41 +24,59 @@ type masterEdge struct {
 	odown bool
 }
 
-// voteRound 向 peers 拉取一轮 IS-MASTER-DOWN-BY-ADDR：返回 down 票数与
+// voteRound 向 peers 并行拉取一轮 IS-MASTER-DOWN-BY-ADDR：返回 down 票数与
 // 投给本哨兵的票数（含自票；自票经 HandleVote 落本地 epoch）。
 func voteRound(reg *sentinel.Registry, name, masterHost string, masterPort int, epoch uint64, runID string, peers []string) (downs, grants int) {
 	if granted, _ := reg.HandleVote(name, epoch, runID); granted {
 		grants = 1
 	}
+	type res struct {
+		down bool
+		lead string
+		ok   bool
+	}
+	ch := make(chan res, len(peers))
 	for _, p := range peers {
-		down, leader, _, err := sentinel.QueryPeer(p, masterHost, masterPort, epoch, runID, name)
-		if err != nil {
+		go func(addr string) {
+			down, leader, _, err := sentinel.QueryPeer(addr, masterHost, masterPort, epoch, runID, name)
+			if err != nil {
+				ch <- res{}
+				return
+			}
+			ch <- res{down: down, lead: leader, ok: true}
+		}(p)
+	}
+	for range peers {
+		r := <-ch
+		if !r.ok {
 			continue
 		}
-		if down {
+		if r.down {
 			downs++
 		}
-		if leader == runID {
+		if r.lead == runID {
 			grants++
 		}
 	}
 	return downs, grants
 }
 
-// peersExceptSelf 去重对端地址并排除自身。
+// peersExceptSelf 去重对端地址并排除自身（归一化后比较）。
 func peersExceptSelf(addrs []string, self string) []string {
-	seen := map[string]bool{self: true}
+	nself := sentinel.NormalizeAddr(self)
+	seen := map[string]bool{nself: true}
 	var out []string
 	for _, a := range addrs {
-		if !seen[a] {
-			seen[a] = true
-			out = append(out, a)
+		na := sentinel.NormalizeAddr(a)
+		if !seen[na] {
+			seen[na] = true
+			out = append(out, na)
 		}
 	}
 	return out
 }
 
-// helloStep 发布本哨兵 hello，并抓取各对端 hello 入表 + 尝试收养新主。
+// helloStep 发布本哨兵 hello，并并行抓取各对端 hello 入表 + 尝试收养新主。
 func helloStep(reg *sentinel.Registry, selfHost, selfPort, runID string, pub *commands.PubSubRegistry) {
 	for _, name := range reg.Names() {
 		mh, mp, ok := reg.GetMasterAddr(name)
@@ -70,14 +88,30 @@ func helloStep(reg *sentinel.Registry, selfHost, selfPort, runID string, pub *co
 			Master: name, MasterIP: mh, MasterPort: mp, MasterEpoch: epoch}
 		pub.Publish(sentinelHelloChannel, protocol.BulkOf(h.Encode()))
 	}
-	for _, p := range peersExceptSelf(reg.Peers.Addrs(), net.JoinHostPort(selfHost, selfPort)) {
-		h, err := sentinel.FetchHello(p, 3*time.Second)
-		if err != nil {
+	peers := peersExceptSelf(reg.Peers.Addrs(), net.JoinHostPort(selfHost, selfPort))
+	type fetched struct {
+		h  sentinel.Hello
+		ok bool
+	}
+	ch := make(chan fetched, len(peers))
+	for _, p := range peers {
+		go func(addr string) {
+			h, err := sentinel.FetchHello(addr, 3*time.Second)
+			if err != nil {
+				ch <- fetched{}
+				return
+			}
+			ch <- fetched{h: h, ok: true}
+		}(p)
+	}
+	for range peers {
+		f := <-ch
+		if !f.ok {
 			continue
 		}
-		reg.Peers.Upsert(h)
-		if h.Master != "" && h.MasterIP != "" {
-			reg.AdoptMaster(h.Master, net.JoinHostPort(h.MasterIP, strconv.Itoa(h.MasterPort)), h.MasterEpoch, h.RunID)
+		reg.Peers.Upsert(f.h)
+		if f.h.Master != "" && f.h.MasterIP != "" {
+			reg.AdoptMaster(f.h.Master, net.JoinHostPort(f.h.MasterIP, strconv.Itoa(f.h.MasterPort)), f.h.MasterEpoch, f.h.RunID)
 		}
 	}
 }
@@ -110,7 +144,6 @@ func autoStep(reg *sentinel.Registry, name, runID string, peers []string, timeou
 		reg.ObserveMaster(name, promoted)
 		return
 	}
-	pub.Publish("+try-failover", protocol.BulkOf(fmt.Sprintf("master %s %s %d", name, curHost, curPort)))
 	time.Sleep(time.Duration(100+rand.IntN(300)) * time.Millisecond)
 	downs2, grants2 := voteRound(reg, name, curHost, curPort, cand, runID, peers)
 	if !reg.IsObjectivelyDown(name, downs2) {
@@ -119,6 +152,7 @@ func autoStep(reg *sentinel.Registry, name, runID string, peers []string, timeou
 	if grants2*2 <= 1+len(peers) {
 		return
 	}
+	pub.Publish("+try-failover", protocol.BulkOf(fmt.Sprintf("master %s %s %d", name, curHost, curPort)))
 	pub.Publish("+elected-leader", protocol.BulkOf(fmt.Sprintf("master %s %s %d", name, curHost, curPort)))
 	var infos []sentinel.SlaveInfo
 	if fetched, err := sentinel.FetchSlaveInfos(curAddr, slaves); err == nil {
@@ -130,14 +164,10 @@ func autoStep(reg *sentinel.Registry, name, runID string, peers []string, timeou
 }
 
 // runSentinelLoops 起 hello/auto 两个后台循环，随 stop 一并退出。
+// downAfter<=0 时只跑 hello 发现，auto 选举执行全程静默（不空转）。
 func runSentinelLoops(reg *sentinel.Registry, selfAddr, runID string, downAfter, timeout time.Duration, pub *commands.PubSubRegistry, stop <-chan struct{}) {
 	selfHost, selfPort, _ := net.SplitHostPort(selfAddr)
-	autoInterval := downAfter
-	if autoInterval <= 0 {
-		autoInterval = time.Second
-	}
 	helloT := time.NewTicker(sentinelHelloInterval)
-	autoT := time.NewTicker(autoInterval)
 	go func() {
 		defer helloT.Stop()
 		for {
@@ -149,6 +179,10 @@ func runSentinelLoops(reg *sentinel.Registry, selfAddr, runID string, downAfter,
 			}
 		}
 	}()
+	if downAfter <= 0 {
+		return
+	}
+	autoT := time.NewTicker(downAfter)
 	go func() {
 		defer autoT.Stop()
 		edges := map[string]*masterEdge{}

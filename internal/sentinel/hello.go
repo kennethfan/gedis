@@ -69,29 +69,47 @@ func (p *PeerTable) Upsert(h Hello) {
 	p.peers[h.RunID] = h
 }
 
-// Addrs 返回全部已知对端的 IP:Port；IP/Port 缺失者不列入。
+// NormalizeAddr 归一化地址文本用于去重与自排除比较。
+func NormalizeAddr(addr string) string {
+	h, p, err := net.SplitHostPort(addr)
+	if err != nil || h == "" || p == "" {
+		return addr
+	}
+	h = strings.ToLower(strings.TrimSuffix(h, "."))
+	if h == "localhost" {
+		h = "127.0.0.1"
+	}
+	return net.JoinHostPort(h, p)
+}
+
+// Addrs 返回已知对端地址（归一化去重后）。
 func (p *PeerTable) Addrs() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	seen := map[string]bool{}
 	var out []string
 	for _, h := range p.peers {
 		if h.IP == "" || h.Port == "" {
 			continue
 		}
-		out = append(out, h.IP+":"+h.Port)
+		a := NormalizeAddr(h.IP + ":" + h.Port)
+		if !seen[a] {
+			seen[a] = true
+			out = append(out, a)
+		}
 	}
 	return out
 }
 
-// SeedPeers 把种子哨兵地址记为占位对端（RunID 暂用 addr 本身）；
-// gossip 到真实 hello 后同地址会有双条目，调用方去重。非法地址忽略。
+// SeedPeers 记录种子地址为占位对端；非法地址忽略。
 func (p *PeerTable) SeedPeers(addrs []string) {
 	for _, a := range addrs {
-		h, port, err := net.SplitHostPort(a)
+		n := NormalizeAddr(a)
+		h, port, err := net.SplitHostPort(n)
 		if err != nil || h == "" || port == "" {
 			continue
 		}
-		p.Upsert(Hello{IP: h, Port: port, RunID: a})
+		p.Upsert(Hello{IP: h, Port: port, RunID: n})
 	}
 }
 

@@ -91,6 +91,13 @@ func (r *Registry) failoverTo(name, target string) error {
 		return fmt.Errorf("promote %s: %w", target, err)
 	}
 	th, tp, _ := net.SplitHostPort(target)
+	if r.IsDown(old) {
+		r.mu.Lock()
+		st.current = target
+		st.lastFailover = time.Now()
+		r.mu.Unlock()
+		return nil
+	}
 	if err := sendReplicaof(old, th, tp); err != nil {
 		r.mu.Lock()
 		st.current = target
