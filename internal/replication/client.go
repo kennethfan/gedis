@@ -221,10 +221,31 @@ func (c *Client) syncOnce(stop <-chan struct{}) error {
 		if err != nil {
 			return err
 		}
+		if isGetackFrame(v) {
+			ack := protocol.ArrayOf(
+				protocol.BulkOf("REPLCONF"),
+				protocol.BulkOf("ACK"),
+				protocol.BulkOf(strconv.FormatInt(c.currentOffset(), 10)),
+			)
+			if err := writeValue(conn, ack); err != nil {
+				return err
+			}
+			continue
+		}
+		if v.Kind == protocol.KindSimpleString {
+			continue
+		}
 		if err := c.applyOp(v); err != nil {
 			return err
 		}
 	}
+}
+
+// isGetackFrame 识别主库发来的 REPLCONF GETACK 帧（WAIT 驱动副本上报 ACK 用）。
+func isGetackFrame(v protocol.Value) bool {
+	return v.Kind == protocol.KindArray && len(v.Elems) >= 2 &&
+		string(v.Elems[0].Bulk) == "REPLCONF" &&
+		strings.EqualFold(string(v.Elems[1].Bulk), "GETACK")
 }
 
 func (c *Client) currentOffset() int64 {

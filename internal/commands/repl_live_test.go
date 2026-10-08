@@ -152,6 +152,25 @@ func Test_ReplLive_when_PsyncContinue(t *testing.T) {
 	require.Len(t, got.Elems[1].Elems, 1)
 }
 
+// Given: 已挂载的从库
+// When: 主库写后 WAIT 1 5000
+// Then: 回 1（副本 ACK 已达最新 offset）
+func Test_ReplLive_when_Wait(t *testing.T) {
+	master := openReplServer(t)
+	replica := openReplServer(t)
+	dispatchOn(master.router, "SET", "a", "1")
+
+	host, port := replHostPort(t, master.addr)
+	require.Equal(t, protocol.Value{Kind: protocol.KindSimpleString, S: "OK"},
+		replica.router.Dispatch(context.Background(), cmd("REPLICAOF", host, port)))
+	requireReplicaHas(t, replica.router, "a", "1")
+
+	dispatchOn(master.router, "SET", "b", "2")
+	got := master.router.Dispatch(context.Background(), cmd("WAIT", "1", "5000"))
+	require.Equal(t, protocol.KindInteger, got.Kind)
+	require.Equal(t, int64(1), got.I)
+}
+
 func dispatchOn(r *network.Router, args ...string) protocol.Value {
 	return r.Dispatch(context.Background(), cmd(args...))
 }
