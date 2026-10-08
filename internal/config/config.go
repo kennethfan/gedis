@@ -27,6 +27,7 @@ type Config struct {
 	Lua         Lua         `toml:"lua"`
 	Cluster     Cluster     `toml:"cluster"`
 	Sentinel    Sentinel    `toml:"sentinel"`
+	TLS         TLS         `toml:"tls"`
 	// RequirePass 映射为 default 用户口令（空=默认全开放）；ACLFile 缺席即关闭持久化。
 	RequirePass string `toml:"requirepass"`
 	ACLFile     string `toml:"aclfile"`
@@ -137,6 +138,14 @@ type SentinelMaster struct {
 	MasterAddr string   `toml:"master_addr"`
 	Quorum     int      `toml:"quorum"`
 	Slaves     []string `toml:"slaves"`
+}
+
+// TLS holds 服务端 TLS 配置：缺席即关闭（Enabled=false 默认明文）；
+// 启用后主服务口只讲 TLS（同端口切换），需同时给出 cert_file/key_file。
+type TLS struct {
+	Enabled  bool   `toml:"enabled"`
+	CertFile string `toml:"cert_file"`
+	KeyFile  string `toml:"key_file"`
 }
 
 // DefaultSentinelPort 是哨兵口默认端口（Port==0 时用）。
