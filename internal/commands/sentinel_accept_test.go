@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -19,11 +20,17 @@ import (
 
 // openSentinelAccept 按 main.go 顺序接线哨兵口：DefaultRouter、
 // RegisterPubSub、RegisterSentinel；探活 downAfter=0 关闭。
+// spec quorum=2（不断言默认 1，展示真实透传值）；预置一条 gossip
+// 对端，覆盖 SENTINEL sentinels 含 peers。
 func openSentinelAccept(t testing.TB, masterAddr, slaveAddr string) string {
 	t.Helper()
 	reg := sentinel.NewRegistry([]sentinel.NodeSpec{
-		{Name: "mymaster", MasterAddr: masterAddr, Slaves: []string{slaveAddr}},
+		{Name: "mymaster", MasterAddr: masterAddr, Slaves: []string{slaveAddr}, Quorum: 2},
 	}, 0)
+	mh, mp, _ := net.SplitHostPort(masterAddr)
+	port, _ := strconv.Atoi(mp)
+	reg.Peers.Upsert(sentinel.Hello{IP: "127.0.0.1", Port: "26380", RunID: "peer1",
+		Epoch: 1, Master: "mymaster", MasterIP: mh, MasterPort: port, MasterEpoch: 1})
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	selfAddr := ln.Addr().String()
@@ -76,7 +83,7 @@ func TestSentinelAccept_MastersKeys(t *testing.T) {
 	for k := range keys {
 		require.True(t, native[k], "key %q not in native fixture", k)
 	}
-	require.Equal(t, "1", string(flatVal(t, got.Elems[0], "quorum").Bulk))
+	require.Equal(t, "2", string(flatVal(t, got.Elems[0], "quorum").Bulk))
 }
 
 func flatVal(t testing.TB, v protocol.Value, key string) protocol.Value {
@@ -162,6 +169,33 @@ func TestSentinelAccept_FailoverSwitchMaster(t *testing.T) {
 	got := ctl.value(t)
 	require.Equal(t, newHost, string(got.Elems[0].Bulk))
 	require.Equal(t, newPort, string(got.Elems[1].Bulk))
+}
+
+// Given: 原生 sentinels.redis + 预置 gossip 对端
+// When: SENTINEL sentinels mymaster
+// Then: 含自己 + 对端两条；每条 key 集是真机字段的子集，且含 name/ip/port/flags
+func TestSentinelAccept_SentinelsKeys(t *testing.T) {
+	master, slave := startSentinelStub(t), startSentinelStub(t)
+	ac := dialAccept(t, openSentinelAccept(t, master, slave))
+	ac.do(t, "SENTINEL", "sentinels", "mymaster")
+	got := ac.value(t)
+	require.Equal(t, protocol.KindArray, got.Kind)
+	require.Len(t, got.Elems, 2)
+	native := fixtureFields(t, "sentinels.redis")
+	foundPeer := false
+	for _, e := range got.Elems {
+		keys := flatKeys(e)
+		for _, k := range []string{"name", "ip", "port", "flags"} {
+			require.True(t, keys[k], "missing key %q", k)
+		}
+		for k := range keys {
+			require.True(t, native[k], "key %q not in native fixture", k)
+		}
+		if string(flatVal(t, e, "port").Bulk) == "26380" {
+			foundPeer = true
+		}
+	}
+	require.True(t, foundPeer, "gossip peer missing from sentinels")
 }
 
 // Given: 静态拓扑最小版

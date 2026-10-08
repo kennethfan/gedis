@@ -77,6 +77,11 @@ func (h *sentinelHandler) sentinel(_ context.Context, args []protocol.Value) pro
 			return sentinelArgErr(sub)
 		}
 		return h.failover(rest)
+	case "IS-MASTER-DOWN-BY-ADDR":
+		if len(rest) != 4 {
+			return sentinelArgErr(sub)
+		}
+		return h.isMasterDownByAddr(rest)
 	case "RESET", "REMOVE", "SET":
 		return errValueStr("ERR Static sentinel topology does not support SENTINEL " + strings.ToUpper(sub))
 	case "FLUSHCONFIG":
@@ -127,7 +132,7 @@ func (h *sentinelHandler) masterEntry(name, addr string) protocol.Value {
 		protocol.BulkOf("name"), protocol.BulkOf(name),
 		protocol.BulkOf("ip"), protocol.BulkOf(host),
 		protocol.BulkOf("port"), protocol.BulkOf(port),
-		protocol.BulkOf("quorum"), protocol.BulkOf("1"),
+		protocol.BulkOf("quorum"), protocol.BulkOf(strconv.Itoa(h.reg.Quorum(name))),
 		protocol.BulkOf("down-after-milliseconds"), protocol.BulkOf(strconv.FormatInt(h.reg.DownAfterMs(), 10)),
 		protocol.BulkOf("flags"), protocol.BulkOf(flags),
 	)
@@ -168,12 +173,22 @@ func (h *sentinelHandler) sentinels(rest []protocol.Value) protocol.Value {
 		return errValueStr("ERR No such master with that name")
 	}
 	host, port, _ := net.SplitHostPort(h.selfAddr)
-	return protocol.ArrayOf(protocol.ArrayOf(
+	out := []protocol.Value{protocol.ArrayOf(
 		protocol.BulkOf("name"), protocol.BulkOf(h.selfAddr),
 		protocol.BulkOf("ip"), protocol.BulkOf(host),
 		protocol.BulkOf("port"), protocol.BulkOf(port),
 		protocol.BulkOf("flags"), protocol.BulkOf("sentinel"),
-	))
+	)}
+	for _, addr := range h.reg.Peers.Addrs() {
+		ph, pp, _ := net.SplitHostPort(addr)
+		out = append(out, protocol.ArrayOf(
+			protocol.BulkOf("name"), protocol.BulkOf(addr),
+			protocol.BulkOf("ip"), protocol.BulkOf(ph),
+			protocol.BulkOf("port"), protocol.BulkOf(pp),
+			protocol.BulkOf("flags"), protocol.BulkOf("sentinel"),
+		))
+	}
+	return protocol.ArrayOf(out...)
 }
 
 func (h *sentinelHandler) getMasterAddr(rest []protocol.Value) protocol.Value {
@@ -212,6 +227,53 @@ func (h *sentinelHandler) failover(rest []protocol.Value) protocol.Value {
 			fmt.Sprintf("%s %s %d %s %d", name, oldHost, oldPort, newHost, newPort)))
 	}
 	return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
+}
+
+func (h *sentinelHandler) isMasterDownByAddr(rest []protocol.Value) protocol.Value {
+	ip, ok := argString(rest[0])
+	if !ok {
+		return errValueStr("ERR syntax error")
+	}
+	port, ok := argString(rest[1])
+	if !ok {
+		return errValueStr("ERR syntax error")
+	}
+	epochStr, ok := argString(rest[2])
+	if !ok {
+		return errValueStr("ERR syntax error")
+	}
+	candEpoch, err := strconv.ParseUint(epochStr, 10, 64)
+	if err != nil {
+		return errValueStr("ERR invalid epoch")
+	}
+	candRunID, ok := argString(rest[3])
+	if !ok {
+		return errValueStr("ERR syntax error")
+	}
+	addr := net.JoinHostPort(ip, port)
+	name := ""
+	for _, n := range h.reg.Names() {
+		host, p, found := h.reg.GetMasterAddr(n)
+		if found && host == ip && strconv.Itoa(p) == port {
+			name = n
+			break
+		}
+	}
+	if name == "" {
+		return errValueStr("ERR No such master with that address")
+	}
+	flag := "0"
+	if h.reg.IsSubjectivelyDown(addr) {
+		flag = "1"
+	}
+	granted, epoch := h.reg.HandleVote(name, candEpoch, candRunID)
+	leaderRunID, leaderEpoch := "*", "0"
+	if granted {
+		leaderRunID, leaderEpoch = candRunID, strconv.FormatUint(epoch, 10)
+	} else if votedRunID, votedEpoch, found := h.reg.VotedFor(name); found && votedRunID != "" {
+		leaderRunID, leaderEpoch = votedRunID, strconv.FormatUint(votedEpoch, 10)
+	}
+	return protocol.ArrayOf(protocol.BulkOf(flag), protocol.BulkOf(leaderRunID), protocol.BulkOf(leaderEpoch))
 }
 
 func (h *sentinelHandler) info(_ context.Context, args []protocol.Value) protocol.Value {

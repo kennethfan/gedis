@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -37,6 +38,24 @@ func mustParseFsync(s string) storage.FsyncPolicy {
 		os.Exit(1)
 	}
 	return policy
+}
+
+func loadClusterSnapshot(path string, topo *cluster.Topology) error {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read cluster snapshot: %w", err)
+	}
+	snap, err := cluster.UnmarshalSnapshot(data, topo.Nodes())
+	if err != nil {
+		return fmt.Errorf("parse cluster snapshot: %w", err)
+	}
+	if err := topo.LoadSnapshot(snap); err != nil {
+		return fmt.Errorf("load cluster snapshot: %w", err)
+	}
+	return nil
 }
 
 func run() error {
@@ -90,6 +109,7 @@ func run() error {
 	commands.RegisterGeo(router, store)
 	commands.RegisterScan(router, store)
 	commands.RegisterGeneric(router, store)
+	commands.RegisterDumpRestore(router, store)
 	commands.RegisterBitmap(router, store)
 	commands.RegisterHLL(router, store)
 	commands.RegisterStream(router, store, stats)
@@ -117,8 +137,19 @@ func run() error {
 		slog.Info("cluster mode enabled", "self", clusterTopo.SelfAddr(), "nodes", len(clusterTopo.Nodes()))
 	}
 	askingReg := commands.NewAskRegistry()
+	commands.RegisterMigrate(router, store)
 	clusterH := commands.RegisterCluster(router, store, clusterTopo, askingReg)
 	txnReg.PreExec = clusterH.CheckExec
+	if clusterTopo != nil && cfg.Storage.DataDir != "" {
+		snapPath := filepath.Join(cfg.Storage.DataDir, "nodes.conf")
+		if err := loadClusterSnapshot(snapPath, clusterTopo); err != nil {
+			return err
+		}
+		nodes := clusterTopo.Nodes()
+		clusterH.SetPersist(func(snap cluster.Snapshot) error {
+			return os.WriteFile(snapPath, cluster.MarshalSnapshot(snap, nodes), 0o644)
+		})
+	}
 	aclStore := acl.NewStore()
 	if cfg.ACLFile != "" {
 		if err := acl.Load(cfg.ACLFile, aclStore); err != nil {
@@ -152,10 +183,15 @@ func run() error {
 		sentinelSelf := fmt.Sprintf("%s:%d", cfg.Server.Host, sentinelPort)
 		sentinelReg := sentinel.NewRegistry(specs, time.Duration(cfg.Sentinel.DownAfterMs)*time.Millisecond)
 		sentinelStop = make(chan struct{})
-		sentinelReg.StartProbeLoop(sentinelStop)
+		go sentinelReg.StartProbeLoop(sentinelStop)
 		sRouter := network.DefaultRouter()
 		sentinelPub := commands.RegisterPubSub(sRouter)
 		commands.RegisterSentinel(sRouter, sentinelReg, sentinelSelf, sentinelPub)
+		sentinelReg.Peers.SeedPeers(cfg.Sentinel.Sentinels)
+		runSentinelLoops(sentinelReg, sentinelSelf, sentinel.NewRunID(),
+			time.Duration(cfg.Sentinel.DownAfterMs)*time.Millisecond,
+			time.Duration(cfg.Sentinel.FailoverTimeoutMs)*time.Millisecond,
+			sentinelPub, sentinelStop)
 		sentinelSrv = network.NewServer(sRouter)
 		sentinelSrv.OnConnClose(func(c net.Conn) {
 			sentinelPub.ConnClosed(c)
@@ -181,6 +217,7 @@ func run() error {
 	})
 	exp := commands.NewExpirer(store, stats)
 	exp.Start()
+	defer exp.Stop() // 早退路径（监听失败等）先停清扫再关存储，防 SweepOnce 扫已关 DB panic
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	ln, err := net.Listen("tcp", addr)

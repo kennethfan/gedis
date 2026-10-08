@@ -39,6 +39,50 @@ func TestSentinelSpecs_BadAddrFails(t *testing.T) {
 	}
 }
 
+func TestSentinelSpecs_QuorumPassthrough(t *testing.T) {
+	cfg := Sentinel{Enabled: true, FailoverTimeoutMs: 10000,
+		Masters: []SentinelMaster{{Name: "m", MasterAddr: "127.0.0.1:6380", Quorum: 2, Slaves: []string{"127.0.0.1:6381"}}}}
+	specs, err := cfg.Specs()
+	if err != nil {
+		t.Fatalf("specs: %v", err)
+	}
+	if specs[0].Quorum != 2 {
+		t.Fatalf("quorum not passthrough: %+v", specs[0])
+	}
+}
+
+func TestSentinelSpecs_QuorumZeroDefaultsOne(t *testing.T) {
+	cfg := Sentinel{Masters: []SentinelMaster{{Name: "m", MasterAddr: "127.0.0.1:6380", Slaves: []string{"127.0.0.1:6381"}}}}
+	specs, err := cfg.Specs()
+	if err != nil {
+		t.Fatalf("specs: %v", err)
+	}
+	if specs[0].Quorum != 1 {
+		t.Fatalf("got %+v", specs[0])
+	}
+}
+
+func TestSentinelSpecs_NegativeQuorumFails(t *testing.T) {
+	cfg := Sentinel{Masters: []SentinelMaster{{Name: "m", MasterAddr: "127.0.0.1:6380", Quorum: -1, Slaves: []string{"127.0.0.1:6381"}}}}
+	if _, err := cfg.Specs(); err == nil {
+		t.Fatal("expect negative quorum error")
+	}
+}
+
+func TestSentinelLoad_FailoverTimeoutDefault(t *testing.T) {
+	dir := t.TempDir()
+	absent := filepath.Join(dir, "absent.toml")
+	if err := os.WriteFile(absent, []byte("[sentinel]\nenabled = true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(absent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Sentinel.FailoverTimeoutMs != DefaultSentinelFailoverTimeoutMs {
+		t.Fatalf("absent failover_timeout_ms: got %d, want %d", cfg.Sentinel.FailoverTimeoutMs, DefaultSentinelFailoverTimeoutMs)
+	}
+}
 func TestSentinelSpecs_NegativeDownAfterFails(t *testing.T) {
 	cfg := Sentinel{DownAfterMs: -1, Masters: []SentinelMaster{
 		{Name: "a", MasterAddr: "127.0.0.1:6380", Slaves: []string{"127.0.0.1:6381"}},
@@ -71,5 +115,13 @@ func TestSentinelLoad_DownAfterDefault(t *testing.T) {
 	}
 	if cfg2.Sentinel.DownAfterMs != 0 {
 		t.Fatalf("explicit down_after_ms=0: got %d, want 0", cfg2.Sentinel.DownAfterMs)
+	}
+}
+
+func TestSentinelSpecs_BadSeedFails(t *testing.T) {
+	cfg := Sentinel{Sentinels: []string{"not-an-addr"},
+		Masters: []SentinelMaster{{Name: "m", MasterAddr: "127.0.0.1:6380", Quorum: 1, Slaves: []string{"127.0.0.1:6381"}}}}
+	if _, err := cfg.Specs(); err == nil {
+		t.Fatal("expect bad seed addr error")
 	}
 }

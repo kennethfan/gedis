@@ -23,10 +23,15 @@ var ErrNoHealthySlave = errors.New("sentinel: no healthy slave")
 const replicaofTimeout = 2 * time.Second
 
 type masterState struct {
-	spec    NodeSpec
-	current string
-	down    map[string]bool
-	failMu  sync.Mutex
+	spec         NodeSpec
+	current      string
+	down         map[string]bool
+	sdownCount   map[string]int
+	currentEpoch uint64
+	votedEpoch   uint64
+	votedRunID   string
+	lastFailover time.Time
+	failMu       sync.Mutex
 }
 
 // Registry 是静态 masters 注册表：master 名 → 主地址/slaves 列表/
@@ -35,13 +40,15 @@ type Registry struct {
 	mu        sync.RWMutex
 	masters   map[string]*masterState
 	downAfter time.Duration
+	// Peers 是 gossip 发现的对端哨兵表；NewRegistry 初始化为空表。
+	Peers *PeerTable
 }
 
 // NewRegistry 由校验过的 specs 构造注册表；当前主初始为配置主。
 func NewRegistry(specs []NodeSpec, downAfter time.Duration) *Registry {
-	r := &Registry{masters: make(map[string]*masterState, len(specs)), downAfter: downAfter}
+	r := &Registry{masters: make(map[string]*masterState, len(specs)), downAfter: downAfter, Peers: NewPeerTable()}
 	for _, s := range specs {
-		r.masters[s.Name] = &masterState{spec: s, current: s.MasterAddr, down: make(map[string]bool)}
+		r.masters[s.Name] = &masterState{spec: s, current: s.MasterAddr, down: make(map[string]bool), sdownCount: make(map[string]int)}
 	}
 	return r
 }
@@ -130,9 +137,10 @@ func (r *Registry) SetDown(addr string, down bool) {
 	}
 }
 
-// Failover 对 name 执行一次手动切换：选首个非 down slave，提升为
-// 主（REPLICAOF NO ONE），旧主降为其从（REPLICAOF <new>），翻转缓存。
-// 任一步失败即 abort：选从失败/提升失败不翻转；旧主降级失败不回滚。
+// Failover 对 name 执行一次手动切换：选首个非 down slave 并调
+// failoverTo（提升+降旧主+翻缓存+记 lastFailover）。
+// 无健康 slave 时 abort：不翻转当前主，不发送 REPLICAOF。
+// 目标即当前主时短路 nil（幂等，不记 lastFailover）。
 func (r *Registry) Failover(name string) error {
 	r.mu.RLock()
 	st, found := r.masters[name]
@@ -140,11 +148,8 @@ func (r *Registry) Failover(name string) error {
 	if !found {
 		return ErrUnknownMaster
 	}
-	st.failMu.Lock()
-	defer st.failMu.Unlock()
 
 	r.mu.RLock()
-	old := st.current
 	slaves := append([]string(nil), st.spec.Slaves...)
 	down := make(map[string]bool, len(st.down))
 	for a, d := range st.down {
@@ -162,20 +167,10 @@ func (r *Registry) Failover(name string) error {
 	if target == "" {
 		return ErrNoHealthySlave
 	}
-	if err := sendReplicaof(target, "NO", "ONE"); err != nil {
-		return fmt.Errorf("promote %s: %w", target, err)
-	}
-	th, tp, _ := net.SplitHostPort(target)
-	if err := sendReplicaof(old, th, tp); err != nil {
-		r.mu.Lock()
-		st.current = target
-		r.mu.Unlock()
+	if ch, cp, ok := r.GetMasterAddr(name); ok && net.JoinHostPort(ch, strconv.Itoa(cp)) == target {
 		return nil
 	}
-	r.mu.Lock()
-	st.current = target
-	r.mu.Unlock()
-	return nil
+	return r.failoverTo(name, target)
 }
 
 func sendReplicaof(addr string, args ...string) error {

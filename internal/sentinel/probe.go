@@ -7,8 +7,9 @@ import (
 	"time"
 )
 
-// ProbeOnce 对全部被监控地址做一次 DialTimeout+PING 探活并更新 down
-// 标记；downAfter<=0 时跳过（只报配置主，不探活）。
+// ProbeOnce 对全部被监控地址做一次 DialTimeout+PING 探活并经 RecordProbe
+// 更新 SDOWN 计数与 down 标记；主地址取有效主 current（failover 后跟随
+// 新主，旧主不再被反复标 down）；downAfter<=0 时跳过（只报配置主，不探活）。
 func (r *Registry) ProbeOnce() {
 	if r.downAfter <= 0 {
 		return
@@ -20,7 +21,11 @@ func (r *Registry) ProbeOnce() {
 	r.mu.RLock()
 	var targets []target
 	for name, st := range r.masters {
-		targets = append(targets, target{name, st.spec.MasterAddr})
+		cur := st.current
+		if cur == "" {
+			cur = st.spec.MasterAddr
+		}
+		targets = append(targets, target{name, cur})
 		for _, s := range st.spec.Slaves {
 			targets = append(targets, target{name, s})
 		}
@@ -31,7 +36,7 @@ func (r *Registry) ProbeOnce() {
 		timeout = time.Second
 	}
 	for _, t := range targets {
-		r.SetDown(t.addr, !pingOK(t.addr, timeout))
+		r.RecordProbe(t.addr, pingOK(t.addr, timeout))
 	}
 }
 
