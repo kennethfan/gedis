@@ -119,7 +119,7 @@ make bench   # Benchmarks
 
 ## Scope (not in v1)
 
-Pub/Sub, Lua, MULTI/transactions, Cluster, Sentinel.
+TLS (encryption in transit).
 
 ## License
 
