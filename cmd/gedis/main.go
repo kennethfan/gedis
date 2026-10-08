@@ -23,6 +23,7 @@ import (
 	"github.com/kennethfan/gedis/internal/replication"
 	"github.com/kennethfan/gedis/internal/sentinel"
 	"github.com/kennethfan/gedis/internal/storage"
+	"github.com/kennethfan/gedis/internal/tlsdial"
 )
 
 func main() {
@@ -242,6 +243,7 @@ func run() error {
 	defer exp.Stop() // 早退路径（监听失败等）先停清扫再关存储，防 SweepOnce 扫已关 DB panic
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
+	tlsdial.Configure(tlsdial.Settings{Enabled: cfg.TLS.Enabled, InsecureSkipVerify: cfg.TLS.InsecureSkipVerify})
 	ln, err := listenMain(cfg.Server.Host, cfg.Server.Port, cfg.TLS)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)

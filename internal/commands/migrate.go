@@ -13,6 +13,7 @@ import (
 	"github.com/kennethfan/gedis/internal/datastruct"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
+	"github.com/kennethfan/gedis/internal/tlsdial"
 )
 
 // migrateMeta 登记 MIGRATE：key 在命令名后的 args[2]（host port key db timeout…）。
@@ -135,7 +136,7 @@ func (h *migrateHandler) migrate(ctx context.Context, args []protocol.Value) pro
 // ASKING 先于 RESTORE（与原生 MIGRATE 线序一致），但回复只做 best-effort
 // 消费：standalone 目标拒收 ASKING 时仍继续 RESTORE。
 func (o migrateOptions) sendRestore(payload []byte, ttl int64) error {
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort(o.host, o.port), o.timeout)
+	conn, err := tlsdial.DialTimeout("tcp", net.JoinHostPort(o.host, o.port), o.timeout)
 	if err != nil {
 		return fmt.Errorf("IOERR error or timeout connecting to target instance")
 	}
