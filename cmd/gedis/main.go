@@ -185,6 +185,7 @@ func run() error {
 		}
 	}
 	authReg := commands.RegisterAuth(router, aclStore)
+	connReg := commands.RegisterConn(router, aclStore, authReg)
 	var aclSaver commands.ACLSaver
 	if cfg.ACLFile != "" {
 		aclSaver = func() error { return acl.Save(cfg.ACLFile, aclStore) }
@@ -237,6 +238,7 @@ func run() error {
 		pubsubReg.ConnClosed(c)
 		askingReg.ConnClosed(c)
 		authReg.ConnClosed(c)
+		connReg.ConnClosed(c)
 	})
 	exp := commands.NewExpirer(store, stats)
 	exp.Start()

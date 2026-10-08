@@ -3,6 +3,7 @@ package commands
 import (
 	"testing"
 
+	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/stretchr/testify/require"
 )
@@ -27,6 +28,8 @@ func Test_CommandArityCoversRouter(t *testing.T) {
 	RegisterReplication(r, store, stats, hub)
 	RegisterWriteCommands(r)
 	RegisterTxn(r, hub)
+	st := acl.NewStore()
+	RegisterConn(r, st, RegisterAuth(r, st))
 	table := CommandArity()
 	for _, name := range r.Commands() {
 		_, ok := table[name]
