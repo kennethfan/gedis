@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kennethfan/gedis/internal/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -103,8 +102,8 @@ func pingPong(t *testing.T, conn net.Conn) {
 
 func Test_Tlsdial_plaintext_mode_passes_through(t *testing.T) {
 	// Given — 明文模式 + 明文服务
-	Configure(config.TLS{})
-	t.Cleanup(func() { Configure(config.TLS{}) })
+	Configure(Settings{})
+	t.Cleanup(func() { Configure(Settings{}) })
 	addr := startPlainServer(t)
 
 	// When/Then — 直通成功
@@ -117,8 +116,8 @@ func Test_Tlsdial_plaintext_mode_passes_through(t *testing.T) {
 func Test_Tlsdial_tls_insecure_skips_verify(t *testing.T) {
 	// Given — TLS + insecure=true + 自签服务
 	certPEM, keyPEM := writeSelfSignedCert(t)
-	Configure(config.TLS{Enabled: true, InsecureSkipVerify: true})
-	t.Cleanup(func() { Configure(config.TLS{}) })
+	Configure(Settings{Enabled: true, InsecureSkipVerify: true})
+	t.Cleanup(func() { Configure(Settings{}) })
 	addr := startTLSServer(t, certPEM, keyPEM)
 
 	// When/Then — 跳过校验建连成功
@@ -131,8 +130,8 @@ func Test_Tlsdial_tls_insecure_skips_verify(t *testing.T) {
 func Test_Tlsdial_tls_verify_rejects_selfsigned(t *testing.T) {
 	// Given — TLS + insecure=false + 自签服务（系统根不信任）
 	certPEM, keyPEM := writeSelfSignedCert(t)
-	Configure(config.TLS{Enabled: true})
-	t.Cleanup(func() { Configure(config.TLS{}) })
+	Configure(Settings{Enabled: true})
+	t.Cleanup(func() { Configure(Settings{}) })
 	addr := startTLSServer(t, certPEM, keyPEM)
 
 	// When/Then — 握手失败
@@ -145,8 +144,8 @@ func Test_Tlsdial_tls_servername_matches_ip_san(t *testing.T) {
 	certPEM, keyPEM := writeSelfSignedCert(t)
 	pool := x509.NewCertPool()
 	require.True(t, pool.AppendCertsFromPEM(certPEM))
-	Configure(config.TLS{Enabled: true})
-	t.Cleanup(func() { Configure(config.TLS{}) })
+	Configure(Settings{Enabled: true})
+	t.Cleanup(func() { Configure(Settings{}) })
 	addr := startTLSServer(t, certPEM, keyPEM)
 
 	// When/Then — pool 信任后建连成功，证明 ServerName=127.0.0.1 命中 IP SAN
