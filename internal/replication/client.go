@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kennethfan/gedis/internal/protocol"
+	"github.com/kennethfan/gedis/internal/tlsdial"
 )
 
 // KV 是复本写路径的最小接口（raw KV 直写，不走命令层）。
@@ -88,11 +89,14 @@ func (c *Client) loop(stop <-chan struct{}) {
 	}
 }
 
+// dialTimeout 是复本出向拨号超时；走 tlsdial 以便跟随全局 [tls] 开关。
+const dialTimeout = 5 * time.Second
+
 func (c *Client) dial() (net.Conn, error) {
 	if c.Dial != nil {
 		return c.Dial()
 	}
-	return net.Dial("tcp", c.addr)
+	return tlsdial.DialTimeout("tcp", c.addr, dialTimeout)
 }
 
 func (c *Client) state() (string, int64) {
