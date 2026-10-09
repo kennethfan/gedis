@@ -19,6 +19,8 @@ func KeysOf(cmd string, args []string) ([]string, bool) {
 	switch cmd {
 	case "EVAL", "EVALSHA", "EVAL_RO", "EVALSHA_RO":
 		return evalKeys(args)
+	case "FCALL", "FCALL_RO":
+		return fcallKeys(args)
 	case "XREAD", "XREADGROUP":
 		return xreadKeys(args)
 	case "SORT":
@@ -142,6 +144,21 @@ func evalKeys(args []string) ([]string, bool) {
 		return nil, false
 	}
 	return allNonEmpty(args[1 : 1+n])
+}
+
+// fcallKeys FCALL fn numkeys key… arg…：numkeys 在 args[1]（fn 名占位 args[0]）。
+func fcallKeys(args []string) ([]string, bool) {
+	if len(args) < 2 {
+		return nil, false
+	}
+	n, err := strconv.Atoi(args[1])
+	if err != nil || n < 0 || n > len(args)-2 {
+		return nil, false
+	}
+	if n == 0 {
+		return nil, false
+	}
+	return allNonEmpty(args[2 : 2+n])
 }
 
 // xreadKeys 取 STREAMS 之后前半段 key；无 STREAMS 直通。

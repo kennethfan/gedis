@@ -146,6 +146,7 @@ func run() error {
 		return fmt.Errorf("invalid lua.time_limit: %w", err)
 	}
 	commands.RegisterLua(router, luaTimeout)
+	commands.RegisterFunctions(router, store, luaTimeout)
 	var clusterTopo *cluster.Topology
 	if cfg.Cluster.Enabled {
 		specs, err := cfg.Cluster.Specs()
