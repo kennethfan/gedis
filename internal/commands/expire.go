@@ -19,6 +19,8 @@ var expireMeta = []acl.Meta{
 	{Name: "PEXPIREAT", Category: "keyspace", Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "PERSIST", Category: "keyspace", Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "PTTL", Category: "keyspace", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "EXPIRETIME", Category: "keyspace", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "PEXPIRETIME", Category: "keyspace", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "OBJECT", Category: "keyspace", ReadOnly: true, Keys: acl.KeySpec{Custom: acl.SubKeyAt1}},
 }
 
@@ -40,6 +42,12 @@ func (s *stringHandler) registerExpire(r *network.Router) {
 	})
 	r.Register("PERSIST", s.persist)
 	r.Register("PTTL", s.pttl)
+	r.Register("EXPIRETIME", func(ctx context.Context, args []protocol.Value) protocol.Value {
+		return s.expireTime(ctx, args, false)
+	})
+	r.Register("PEXPIRETIME", func(ctx context.Context, args []protocol.Value) protocol.Value {
+		return s.expireTime(ctx, args, true)
+	})
 	r.Register("OBJECT", s.object)
 }
 
@@ -203,6 +211,36 @@ func (s *stringHandler) pttl(ctx context.Context, args []protocol.Value) protoco
 		ms = 0
 	}
 	return protocol.Value{Kind: protocol.KindInteger, I: ms}
+}
+
+// expireTime 实现 EXPIRETIME/PEXPIRETIME：回绝对 Unix 时间（秒/毫秒）；
+// miss -2、无过期 -1（对齐真机与 pttl 语义）。
+func (s *stringHandler) expireTime(ctx context.Context, args []protocol.Value, ms bool) protocol.Value {
+	name := "expiretime"
+	if ms {
+		name = "pexpiretime"
+	}
+	if len(args) != 1 {
+		return errValueStr("ERR wrong number of arguments for '" + name + "' command")
+	}
+	key, ok := argString(args[0])
+	if !ok {
+		return errValueStr("ERR invalid key")
+	}
+	e, err := s.getAny(ctx, key)
+	if err != nil {
+		if isNotFound(err) {
+			return protocol.Value{Kind: protocol.KindInteger, I: -2}
+		}
+		return errValue(err)
+	}
+	if e.Expiry == 0 {
+		return protocol.Value{Kind: protocol.KindInteger, I: -1}
+	}
+	if ms {
+		return protocol.Value{Kind: protocol.KindInteger, I: e.Expiry / int64(time.Millisecond)}
+	}
+	return protocol.Value{Kind: protocol.KindInteger, I: e.Expiry / int64(time.Second)}
 }
 
 func (s *stringHandler) object(ctx context.Context, args []protocol.Value) protocol.Value {

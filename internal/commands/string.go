@@ -51,6 +51,7 @@ func RegisterStrings(r *network.Router, kv KV) {
 	h.registerExtra(r)
 	h.registerKeyspace(r)
 	h.registerExpire(r)
+	h.registerLCS(r)
 }
 
 type stringHandler struct {

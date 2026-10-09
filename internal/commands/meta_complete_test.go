@@ -54,7 +54,7 @@ func TestMetaComplete(t *testing.T) {
 	r := wireMainRouter(t)
 	sRouter := network.DefaultRouter()
 	RegisterPubSub(sRouter)
-	RegisterSentinel(sRouter, sentinel.NewRegistry(nil, time.Second), "127.0.0.1:0", RegisterPubSub(sRouter))
+	RegisterSentinel(sRouter, sentinel.NewRegistry(nil, time.Second), "127.0.0.1:0", RegisterPubSub(sRouter), "metatest-runid")
 
 	var missing []string
 	seen := map[string]bool{}

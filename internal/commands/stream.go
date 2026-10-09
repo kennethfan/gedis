@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kennethfan/gedis/internal/acl"
@@ -19,6 +20,7 @@ var streamMeta = []acl.Meta{
 	{Name: "XRANGE", Category: "stream", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "XREVRANGE", Category: "stream", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "XDEL", Category: "stream", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "XSETID", Category: "stream", Keys: acl.KeySpec{First: 0, Last: 0}},
 }
 
 func RegisterStream(r *network.Router, kv KV, stats *network.Stats) {
@@ -31,6 +33,7 @@ func RegisterStream(r *network.Router, kv KV, stats *network.Stats) {
 	r.Register("XRANGE", h.xrange)
 	r.Register("XREVRANGE", h.xrevrange)
 	r.Register("XDEL", h.xdel)
+	r.Register("XSETID", h.xsetid)
 	h.registerRead(r)
 	h.registerTrim(r)
 	h.registerInfo(r)
@@ -176,6 +179,77 @@ func (h *streamHandler) xlen(ctx context.Context, args []protocol.Value) protoco
 		return errValue(err)
 	}
 	return protocol.Value{Kind: protocol.KindInteger, I: int64(len(s.Entries))}
+}
+
+// xsetid 实现 XSETID key last-id [ENTRIES-ADDED n] [MAXDELETEDID id]：
+// 缺 key 回 no such key；last-id 裸 ms 视为 ms-0（复用 StreamParseID）。
+func (h *streamHandler) xsetid(ctx context.Context, args []protocol.Value) protocol.Value {
+	if len(args) < 2 {
+		return errValueStr("ERR wrong number of arguments for 'xsetid' command")
+	}
+	key, ok := argString(args[0])
+	if !ok {
+		return errValueStr("ERR invalid key")
+	}
+	idStr, ok := argString(args[1])
+	if !ok {
+		return errValueStr("ERR Invalid stream ID specified as stream command argument")
+	}
+	last, auto, err := datastruct.StreamParseID(idStr)
+	if err != nil || auto {
+		return errValueStr("ERR Invalid stream ID specified as stream command argument")
+	}
+	var added *uint64
+	var maxDel *datastruct.StreamID
+	for i := 2; i < len(args); {
+		opt, ok := argString(args[i])
+		if !ok {
+			return errValueStr("ERR syntax error")
+		}
+		if i+1 >= len(args) {
+			return errValueStr("ERR syntax error")
+		}
+		val, ok := argString(args[i+1])
+		if !ok {
+			return errValueStr("ERR syntax error")
+		}
+		switch {
+		case strings.EqualFold(opt, "ENTRIES-ADDED"):
+			n, perr := strconv.ParseUint(val, 10, 64)
+			if perr != nil {
+				return errValueStr("ERR value is not an integer or out of range")
+			}
+			added = &n
+		case strings.EqualFold(opt, "MAXDELETEDID"):
+			md, mauto, merr := datastruct.StreamParseID(val)
+			if merr != nil || mauto {
+				return errValueStr("ERR Invalid stream ID specified as stream command argument")
+			}
+			maxDel = &md
+		default:
+			return errValueStr("ERR syntax error")
+		}
+		i += 2
+	}
+	s, expiry, err := h.readStream(ctx, key)
+	if err != nil {
+		if isNotFound(err) {
+			return errValueStr("ERR no such key")
+		}
+		return errValue(err)
+	}
+	s.Last = last
+	s.HasLast = true
+	if added != nil {
+		s.Added = *added
+	}
+	if maxDel != nil {
+		s.MaxDeleted = *maxDel
+	}
+	if werr := h.writeStream(ctx, key, s, expiry); werr != nil {
+		return errValue(werr)
+	}
+	return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
 }
 
 func (h *streamHandler) xrange(ctx context.Context, args []protocol.Value) protocol.Value {

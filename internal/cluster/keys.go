@@ -49,7 +49,7 @@ func KeysOf(cmd string, args []string) ([]string, bool) {
 	case "BITOP":
 		// BITOP op dest srckey…：dest 与源必须同槽
 		return allNonEmpty(args)
-	case "COPY", "RENAME", "RENAMENX":
+	case "COPY", "RENAME", "RENAMENX", "LCS":
 		return allNonEmpty(args[:min(2, len(args))])
 	case "SMOVE":
 		if len(args) >= 2 {
@@ -88,7 +88,7 @@ func KeysOf(cmd string, args []string) ([]string, bool) {
 			return nil, false
 		}
 		return allNonEmpty(append([]string{args[0]}, args[2:2+n]...))
-	case "ZUNION", "ZINTER", "ZDIFF":
+	case "ZUNION", "ZINTER", "ZDIFF", "ZINTERCARD":
 		if len(args) < 2 {
 			return nil, false
 		}
@@ -97,7 +97,7 @@ func KeysOf(cmd string, args []string) ([]string, bool) {
 			return nil, false
 		}
 		return allNonEmpty(args[1 : 1+n])
-	case "LMPOP", "BLMPOP":
+	case "LMPOP", "BLMPOP", "ZMPOP", "BZMPOP":
 		// LMPOP numkeys key…：与 ZUNION 同形（无 dest）
 		if len(args) < 2 {
 			return nil, false

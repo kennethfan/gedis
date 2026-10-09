@@ -36,7 +36,7 @@ func openSentinelAccept(t testing.TB, masterAddr, slaveAddr string) string {
 	selfAddr := ln.Addr().String()
 	r := network.DefaultRouter()
 	pub := RegisterPubSub(r)
-	RegisterSentinel(r, reg, selfAddr, pub)
+	RegisterSentinel(r, reg, selfAddr, pub, "accepttest-runid")
 	srv := network.NewServer(r)
 	srv.OnConnClose(func(c net.Conn) { pub.ConnClosed(c) })
 	go func() { _ = srv.Serve(ln) }()

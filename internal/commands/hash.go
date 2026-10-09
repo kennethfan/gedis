@@ -20,6 +20,7 @@ var hashMeta = []acl.Meta{
 	{Name: "HSETNX", Category: "hash", Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "HEXISTS", Category: "hash", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "HLEN", Category: "hash", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "HSTRLEN", Category: "hash", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
 }
 
 func RegisterHash(r *network.Router, kv KV) {
@@ -33,6 +34,7 @@ func RegisterHash(r *network.Router, kv KV) {
 	r.Register("HSETNX", h.hsetnx)
 	r.Register("HEXISTS", h.hexists)
 	r.Register("HLEN", h.hlen)
+	r.Register("HSTRLEN", h.hstrlen)
 	h.registerMulti(r)
 	h.registerIncr(r)
 	h.registerHashExpire(r)
@@ -270,4 +272,26 @@ func (h *hashHandler) hlen(ctx context.Context, args []protocol.Value) protocol.
 		return errValue(err)
 	}
 	return protocol.Value{Kind: protocol.KindInteger, I: int64(len(m))}
+}
+
+func (h *hashHandler) hstrlen(ctx context.Context, args []protocol.Value) protocol.Value {
+	if len(args) != 2 {
+		return errValueStr("ERR wrong number of arguments for 'hstrlen' command")
+	}
+	key, ok := argString(args[0])
+	if !ok {
+		return errValueStr("ERR invalid key")
+	}
+	field, ok := argString(args[1])
+	if !ok {
+		return errValueStr("ERR invalid field")
+	}
+	m, _, err := h.readHash(ctx, key)
+	if err != nil {
+		if isNotFound(err) {
+			return protocol.Value{Kind: protocol.KindInteger, I: 0}
+		}
+		return errValue(err)
+	}
+	return protocol.Value{Kind: protocol.KindInteger, I: int64(len(m[field]))}
 }

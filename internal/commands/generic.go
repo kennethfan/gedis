@@ -18,6 +18,7 @@ var genericMeta = []acl.Meta{
 	{Name: "RENAME", Category: "keyspace", Keys: acl.KeySpec{First: 0, Last: 1}},
 	{Name: "RENAMENX", Category: "keyspace", Keys: acl.KeySpec{First: 0, Last: 1}},
 	{Name: "SORT", Category: "keyspace", Keys: acl.KeySpec{Custom: acl.SortStoreKey}},
+	{Name: "SORT_RO", Category: "keyspace", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
 }
 
 func RegisterGeneric(r *network.Router, kv KV) {
@@ -29,6 +30,7 @@ func RegisterGeneric(r *network.Router, kv KV) {
 	r.Register("RENAME", h.renamePlain)
 	r.Register("RENAMENX", h.renamenx)
 	r.Register("SORT", h.sort)
+	r.Register("SORT_RO", h.sortRO)
 }
 
 type genericHandler struct {
@@ -383,6 +385,17 @@ type sortItem struct {
 	elem  string
 	score float64
 	str   string
+}
+
+func (h *genericHandler) sortRO(ctx context.Context, args []protocol.Value) protocol.Value {
+	o, errReply := parseSortOptions(args)
+	if errReply != nil {
+		return *errReply
+	}
+	if o.storeOn {
+		return errValueStr("ERR syntax error")
+	}
+	return h.sort(ctx, args)
 }
 
 func (h *genericHandler) sort(ctx context.Context, args []protocol.Value) protocol.Value {

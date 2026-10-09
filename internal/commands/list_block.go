@@ -22,6 +22,7 @@ var listBlockMeta = []acl.Meta{
 	{Name: "BLMPOP", Category: "list", Keys: acl.KeySpec{Custom: acl.NumkeysKeys(1, 2)}},
 	{Name: "BRMPOP", Category: "list", Keys: acl.KeySpec{Custom: acl.NumkeysKeys(1, 2)}},
 	{Name: "LPOS", Category: "list", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "LMPOP", Category: "list", Keys: acl.KeySpec{Custom: acl.NumkeysKeys(0, 1)}},
 }
 
 func (h *listHandler) registerBlock(r *network.Router) {
@@ -32,6 +33,7 @@ func (h *listHandler) registerBlock(r *network.Router) {
 	r.Register("BRPOP", h.brpop)
 	r.Register("BLMPOP", h.blmpop)
 	r.Register("BRMPOP", h.brmpop)
+	r.Register("LMPOP", h.lmpop)
 	r.Register("LPOS", h.lpos)
 }
 
@@ -263,6 +265,84 @@ func (h *listHandler) bmpop(ctx context.Context, args []protocol.Value, _ bool) 
 		case <-time.After(blockPollInterval):
 		}
 	}
+}
+
+// lmpop 实现 LMPOP numkeys key [key ...] LEFT|RIGHT [COUNT n]：
+// BLMPOP 的非阻塞单轮，首个非空 key 弹出后即返；全空回 nil array。
+func (h *listHandler) lmpop(ctx context.Context, args []protocol.Value) protocol.Value {
+	if len(args) < 3 {
+		return errValueStr("ERR wrong number of arguments for 'lmpop' command")
+	}
+	numkeysStr, ok := argString(args[0])
+	if !ok {
+		return errValueStr("ERR value is not an integer or out of range")
+	}
+	numkeys, err := strconv.ParseInt(numkeysStr, 10, 64)
+	if err != nil || numkeys <= 0 || int(numkeys) > len(args)-1 {
+		return errValueStr("ERR value is not an integer or out of range")
+	}
+	keys := make([]string, 0, numkeys)
+	for _, a := range args[1 : 1+numkeys] {
+		k, ok := argString(a)
+		if !ok {
+			return errValueStr("ERR invalid key")
+		}
+		keys = append(keys, k)
+	}
+	rest := args[1+numkeys:]
+	if len(rest) < 1 {
+		return errValueStr("ERR syntax error")
+	}
+	dirStr, ok := argString(rest[0])
+	if !ok {
+		return errValueStr("ERR syntax error")
+	}
+	var tail bool
+	switch strings.ToUpper(dirStr) {
+	case "LEFT":
+		tail = false
+	case "RIGHT":
+		tail = true
+	default:
+		return errValueStr("ERR syntax error")
+	}
+	count := int64(1)
+	if len(rest) > 1 {
+		if len(rest) != 3 {
+			return errValueStr("ERR syntax error")
+		}
+		opt, ok := argString(rest[1])
+		if !ok || strings.ToUpper(opt) != "COUNT" {
+			return errValueStr("ERR syntax error")
+		}
+		countStr, ok := argString(rest[2])
+		if !ok {
+			return errValueStr("ERR value is not an integer or out of range")
+		}
+		count, err = strconv.ParseInt(countStr, 10, 64)
+		if err != nil || count <= 0 {
+			return errValueStr("ERR count should be greater than 0")
+		}
+	}
+	for _, k := range keys {
+		_, _, err := h.readList(ctx, k)
+		if err != nil && !isNotFound(err) {
+			return errValue(err)
+		}
+	}
+	for _, k := range keys {
+		got, found, perr := h.tryPopCount(ctx, k, tail, count)
+		if perr != nil {
+			return errValue(perr)
+		}
+		if found {
+			return protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
+				protocol.BulkOf(k),
+				toBulkArray(got),
+			}}
+		}
+	}
+	return protocol.Value{Kind: protocol.KindArray}
 }
 
 // tryPopCount 从 key 弹最多 count 个元素。

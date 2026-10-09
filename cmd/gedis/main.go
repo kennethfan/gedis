@@ -219,9 +219,10 @@ func run() error {
 		go sentinelReg.StartProbeLoop(sentinelStop)
 		sRouter := network.DefaultRouter()
 		sentinelPub := commands.RegisterPubSub(sRouter)
-		commands.RegisterSentinel(sRouter, sentinelReg, sentinelSelf, sentinelPub)
+		sentinelRunID := sentinel.NewRunID()
+		commands.RegisterSentinel(sRouter, sentinelReg, sentinelSelf, sentinelPub, sentinelRunID)
 		sentinelReg.Peers.SeedPeers(cfg.Sentinel.Sentinels)
-		runSentinelLoops(sentinelReg, sentinelSelf, sentinel.NewRunID(),
+		runSentinelLoops(sentinelReg, sentinelSelf, sentinelRunID,
 			time.Duration(cfg.Sentinel.DownAfterMs)*time.Millisecond,
 			time.Duration(cfg.Sentinel.FailoverTimeoutMs)*time.Millisecond,
 			sentinelPub, sentinelStop)

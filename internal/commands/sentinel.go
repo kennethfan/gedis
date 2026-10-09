@@ -22,11 +22,11 @@ var sentinelMeta = []acl.Meta{
 	{Name: "INFO", Category: "dangerous", ReadOnly: true, Keys: acl.KeySpec{First: -1}},
 }
 
-func RegisterSentinel(r *network.Router, reg *sentinel.Registry, selfAddr string, pub *PubSubRegistry) {
+func RegisterSentinel(r *network.Router, reg *sentinel.Registry, selfAddr string, pub *PubSubRegistry, runID string) {
 	for _, m := range sentinelMeta {
 		acl.RegisterMeta(m)
 	}
-	h := &sentinelHandler{reg: reg, selfAddr: selfAddr, pub: pub}
+	h := &sentinelHandler{reg: reg, selfAddr: selfAddr, pub: pub, runID: runID}
 	r.Register("SENTINEL", h.sentinel)
 	r.Register("INFO", h.info)
 }
@@ -35,6 +35,7 @@ type sentinelHandler struct {
 	reg      *sentinel.Registry
 	selfAddr string
 	pub      *PubSubRegistry
+	runID    string
 }
 
 func (h *sentinelHandler) sentinel(_ context.Context, args []protocol.Value) protocol.Value {
@@ -62,6 +63,21 @@ func (h *sentinelHandler) sentinel(_ context.Context, args []protocol.Value) pro
 			return sentinelArgErr(sub)
 		}
 		return h.slaves(rest)
+	case "REPLICAS":
+		if len(rest) != 1 {
+			return sentinelArgErr(sub)
+		}
+		return h.slaves(rest)
+	case "MYID":
+		if len(rest) != 0 {
+			return sentinelArgErr(sub)
+		}
+		return protocol.BulkOf(h.runID)
+	case "CKQUORUM":
+		if len(rest) != 1 {
+			return sentinelArgErr(sub)
+		}
+		return h.ckquorum(rest)
 	case "SENTINELS":
 		if len(rest) != 1 {
 			return sentinelArgErr(sub)
@@ -82,7 +98,7 @@ func (h *sentinelHandler) sentinel(_ context.Context, args []protocol.Value) pro
 			return sentinelArgErr(sub)
 		}
 		return h.isMasterDownByAddr(rest)
-	case "RESET", "REMOVE", "SET":
+	case "RESET", "REMOVE", "SET", "MONITOR":
 		return errValueStr("ERR Static sentinel topology does not support SENTINEL " + strings.ToUpper(sub))
 	case "FLUSHCONFIG":
 		if len(rest) != 0 {
@@ -189,6 +205,24 @@ func (h *sentinelHandler) sentinels(rest []protocol.Value) protocol.Value {
 		))
 	}
 	return protocol.ArrayOf(out...)
+}
+
+// ckquorum 按静态拓扑计票：自己 + 已发现对端数达 quorum 即 OK。
+// 文案为 gedis 自定（server 模式真机无此分支可 diff）。
+func (h *sentinelHandler) ckquorum(rest []protocol.Value) protocol.Value {
+	name, ok := argString(rest[0])
+	if !ok {
+		return errValueStr("ERR syntax error")
+	}
+	if _, found := h.reg.MasterAddr(name); !found {
+		return errValueStr("ERR No such master with that name")
+	}
+	need := h.reg.Quorum(name)
+	have := 1 + len(h.reg.Peers.Addrs())
+	if have >= need {
+		return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
+	}
+	return errValueStr(fmt.Sprintf("ERR quorum for master '%s' is not reachable", name))
 }
 
 func (h *sentinelHandler) getMasterAddr(rest []protocol.Value) protocol.Value {

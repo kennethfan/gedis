@@ -17,6 +17,7 @@ var geoMeta = []acl.Meta{
 	{Name: "GEOADD", Category: "geo", Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "GEODIST", Category: "geo", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "GEOPOS", Category: "geo", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "GEOHASH", Category: "geo", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
 }
 
 func RegisterGeo(r *network.Router, kv KV) {
@@ -27,6 +28,7 @@ func RegisterGeo(r *network.Router, kv KV) {
 	r.Register("GEOADD", h.geoadd)
 	r.Register("GEODIST", h.geodist)
 	r.Register("GEOPOS", h.geopos)
+	r.Register("GEOHASH", h.geohash)
 	h.registerSearch(r)
 }
 
@@ -244,4 +246,82 @@ func formatGeoCoord(f float64) string {
 	s = strings.TrimRight(s, "0")
 	s = strings.TrimRight(s, ".")
 	return s
+}
+
+// geoBase32 是标准 geohash 字母表；GEOHASH 按 12 字符（经纬交错、经度先行）编码。
+const geoBase32 = "0123456789bcdefghjkmnpqrstuvwxyz"
+
+// geoHashCenter 把 cell 中心按标准二分（经 ±180、纬 ±90，各 25 级）编成
+// 10 字符、末位恒补 '0'（与真机 GEOHASH 在 300+ 随机点上逐字一致）。
+func geoHashCenter(lon, lat float64) string {
+	var lonBits, latBits [25]byte
+	minLon, maxLon := -180.0, 180.0
+	for i := range lonBits {
+		mid := (minLon + maxLon) / 2
+		if lon >= mid {
+			lonBits[i] = 1
+			minLon = mid
+		} else {
+			maxLon = mid
+		}
+	}
+	minLat, maxLat := -90.0, 90.0
+	for i := range latBits {
+		mid := (minLat + maxLat) / 2
+		if lat >= mid {
+			latBits[i] = 1
+			minLat = mid
+		} else {
+			maxLat = mid
+		}
+	}
+	out := make([]byte, 0, 12)
+	for i := 0; i < 10; i++ {
+		var v byte
+		for j := 0; j < 5; j++ {
+			// p 为 50 位流中的全局位号：偶位取经、奇位取纬。
+			// 不可用 j%2（5 为奇数，每字符奇偶翻转，次字符起经纬错位）。
+			p := i*5 + j
+			v <<= 1
+			if p%2 == 0 {
+				v |= lonBits[p/2]
+			} else {
+				v |= latBits[p/2]
+			}
+		}
+		out = append(out, geoBase32[v])
+	}
+	return string(append(out, '0'))
+}
+
+func (h *geoHandler) geohash(ctx context.Context, args []protocol.Value) protocol.Value {
+	if len(args) < 2 {
+		return errValueStr("ERR wrong number of arguments for 'geohash' command")
+	}
+	key, ok := argString(args[0])
+	if !ok {
+		return errValueStr("ERR invalid key")
+	}
+	members, errReply := geoMemberArgs(args, 1)
+	if errReply != nil {
+		return *errReply
+	}
+	pts, errReply := h.geoMembers(ctx, key, members)
+	if errReply != nil {
+		return *errReply
+	}
+	out := make([]protocol.Value, 0, len(members))
+	for _, m := range members {
+		if pts == nil {
+			out = append(out, protocol.Value{Kind: protocol.KindBulkString})
+			continue
+		}
+		p, ok := pts[m]
+		if !ok {
+			out = append(out, protocol.Value{Kind: protocol.KindBulkString})
+			continue
+		}
+		out = append(out, protocol.BulkOf(geoHashCenter(p[0], p[1])))
+	}
+	return protocol.Value{Kind: protocol.KindArray, Elems: out}
 }

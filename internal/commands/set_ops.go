@@ -20,6 +20,7 @@ var setOpsMeta = []acl.Meta{
 	{Name: "SDIFF", Category: "set", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: -1}},
 	{Name: "SDIFFSTORE", Category: "set", Keys: acl.KeySpec{First: 0, Last: -1}},
 	{Name: "SSCAN", Category: "set", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "SINTERCARD", Category: "set", ReadOnly: true, Keys: acl.KeySpec{Custom: acl.NumkeysKeys(0, 1)}},
 }
 
 func (h *setHandler) registerOps(r *network.Router) {
@@ -33,6 +34,7 @@ func (h *setHandler) registerOps(r *network.Router) {
 	r.Register("SDIFF", h.sdiff)
 	r.Register("SDIFFSTORE", h.sdiffstore)
 	r.Register("SSCAN", h.sscan)
+	r.Register("SINTERCARD", h.sintercard)
 }
 
 // readSets 读多个 key 为集合：缺失 key 视为空集；任一类型错误返回 WRONGTYPE。
@@ -78,6 +80,75 @@ func (h *setHandler) sinter(ctx context.Context, args []protocol.Value) protocol
 		return *errReply
 	}
 	return toBulkArray(sortedMembers(h.interSets(sets)))
+}
+
+func (h *setHandler) sintercard(ctx context.Context, args []protocol.Value) protocol.Value {
+	if len(args) < 2 {
+		return errValueStr("ERR wrong number of arguments for 'sintercard' command")
+	}
+	nstr, ok := argString(args[0])
+	if !ok {
+		return errValueStr("ERR value is not an integer or out of range")
+	}
+	numkeys, err := strconv.ParseInt(nstr, 10, 64)
+	if err != nil || numkeys <= 0 || int(numkeys) > len(args)-1 {
+		return errValueStr("ERR wrong number of arguments for 'sintercard' command")
+	}
+	keys, errReply := setKeys(args[1 : 1+numkeys])
+	if errReply != nil {
+		return *errReply
+	}
+	limit := int64(0)
+	rest := args[1+numkeys:]
+	if len(rest) == 2 {
+		opt, ok := argString(rest[0])
+		if !ok || !strings.EqualFold(opt, "LIMIT") {
+			return errValueStr("ERR syntax error")
+		}
+		lstr, ok := argString(rest[1])
+		if !ok {
+			return errValueStr("ERR value is not an integer or out of range")
+		}
+		limit, err = strconv.ParseInt(lstr, 10, 64)
+		if err != nil {
+			return errValueStr("ERR value is not an integer or out of range")
+		}
+		if limit < 0 {
+			return errValueStr("ERR LIMIT can't be negative")
+		}
+	} else if len(rest) != 0 {
+		return errValueStr("ERR syntax error")
+	}
+	sets, errReply := h.readSets(ctx, keys)
+	if errReply != nil {
+		return *errReply
+	}
+	smallest := 0
+	for i := range sets {
+		if len(sets[i]) < len(sets[smallest]) {
+			smallest = i
+		}
+	}
+	var n int64
+	for member := range sets[smallest] {
+		hit := true
+		for i := range sets {
+			if i == smallest {
+				continue
+			}
+			if _, ok := sets[i][member]; !ok {
+				hit = false
+				break
+			}
+		}
+		if hit {
+			n++
+			if limit > 0 && n >= limit {
+				break
+			}
+		}
+	}
+	return protocol.Value{Kind: protocol.KindInteger, I: n}
 }
 
 func (h *setHandler) sunion(ctx context.Context, args []protocol.Value) protocol.Value {
