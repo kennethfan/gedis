@@ -29,7 +29,9 @@ func RegisterServer(r *network.Router, kv KV, stats *network.Stats, hub *replica
 	}
 	h := &serverHandler{kv: kv, stats: stats, hub: hub, conns: conns, deps: deps}
 	h.tracks = NewTrackTable()
+	conns.SetTrackTable(h.tracks)
 	InstallTrackingHook(r, h.conns, h.tracks)
+	InstallInvalidation(h.conns, h.tracks)
 	r.Register("DBSIZE", h.dbsize)
 	r.Register("FLUSHDB", h.flushdb)
 	r.Register("FLUSHALL", h.flushall)

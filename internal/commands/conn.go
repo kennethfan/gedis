@@ -76,6 +76,7 @@ type ConnRegistry struct {
 	mu     sync.Mutex
 	m      map[net.Conn]*ConnState
 	nextID int64
+	tracks *TrackTable
 }
 
 func NewConnRegistry() *ConnRegistry {
@@ -97,6 +98,25 @@ func (c *ConnRegistry) IDOf(conn net.Conn) int64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.state(conn).ID
+}
+
+// ConnByID 按连接 ID 反查连接（失效推送用）；未找到 ok=false。
+func (c *ConnRegistry) ConnByID(id int64) (net.Conn, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for conn, st := range c.m {
+		if st.ID == id {
+			return conn, true
+		}
+	}
+	return nil, false
+}
+
+// SetTrackTable 绑定跟踪表（RegisterServer 装配）：连接关闭时清表项。
+func (c *ConnRegistry) SetTrackTable(t *TrackTable) {
+	c.mu.Lock()
+	c.tracks = t
+	c.mu.Unlock()
 }
 
 // Snapshot 返回全部存活连接的快照（CLIENT LIST 用）。
@@ -207,10 +227,17 @@ func (c *ConnRegistry) Reset(conn net.Conn) {
 	c.state(conn).Name = ""
 }
 
+// ConnClosed 丢弃连接状态，并同步清理跟踪表项与失效推送管道。
 func (c *ConnRegistry) ConnClosed(conn net.Conn) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	st, ok := c.m[conn]
+	tracks := c.tracks
 	delete(c.m, conn)
+	c.mu.Unlock()
+	if ok && tracks != nil {
+		tracks.RemoveConn(st.ID)
+	}
+	DropInvalidationPipe(conn)
 }
 
 type connHandler struct {

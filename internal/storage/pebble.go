@@ -34,6 +34,9 @@ type Pebble struct {
 	policy    string
 	evicted   atomic.Int64
 	evictHook func(string)
+
+	changeMu   sync.Mutex
+	changeHook func(ctx context.Context, op byte, rawKey []byte)
 }
 
 // New 返回绑定到 path 目录的 Pebble 存储（默认选项）。Open 之前不可读写。
@@ -136,14 +139,45 @@ func (p *Pebble) Set(ctx context.Context, key, value []byte) error {
 		return fmt.Errorf("storage: set %q: %w", key, err)
 	}
 	p.trackSet(key, value)
+	p.callChangeHook(ctx, 's', key)
 	if p.opts.Hub != nil {
 		p.opts.Hub.Publish(replication.Op{Key: key, Value: value})
 	}
 	return nil
 }
 
-// Delete 删除 key，不存在也不报错。
+// SetChangeHook 注册变更回调（op 's' 写 / 'd' 删，raw key）；成功变更后
+// 锁外调用，同一 ctx 透传；nil 清除。回调 panic 由调用方约定兜底
+// （commands.InvalidateChange 内 recover），不外溢打断存储写路径。
+func (p *Pebble) SetChangeHook(fn func(ctx context.Context, op byte, rawKey []byte)) {
+	p.changeMu.Lock()
+	p.changeHook = fn
+	p.changeMu.Unlock()
+}
+
+// callChangeHook 锁外取 hook 引用后调用；未注册零开销返回。
+func (p *Pebble) callChangeHook(ctx context.Context, op byte, rawKey []byte) {
+	p.changeMu.Lock()
+	fn := p.changeHook
+	p.changeMu.Unlock()
+	if fn == nil {
+		return
+	}
+	fn(ctx, op, rawKey)
+}
+
+// Delete 删除 key，不存在也不报错；成功后触发 change hook（op 'd'）。
 func (p *Pebble) Delete(ctx context.Context, key []byte) error {
+	if err := p.deleteInternal(ctx, key); err != nil {
+		return err
+	}
+	p.callChangeHook(ctx, 'd', key)
+	return nil
+}
+
+// deleteInternal 删除本体（核算 + 发布，无 change hook）。evictOne 走本
+// 路径：逐出的失效语义由 evictHook（op 'e'）唯一负责，不得再触发 op 'd'。
+func (p *Pebble) deleteInternal(ctx context.Context, key []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}

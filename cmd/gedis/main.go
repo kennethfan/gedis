@@ -110,7 +110,8 @@ func run() error {
 		return fmt.Errorf("open store: %w", err)
 	}
 	defer func() { _ = store.Close() }()
-	store.SetEvictHook(commands.NotifyEvicted)
+	store.SetEvictHook(commands.OnEvicted)
+	store.SetChangeHook(commands.InvalidateChange)
 
 	router := network.DefaultRouter()
 	srv := network.NewServer(router)
@@ -143,6 +144,7 @@ func run() error {
 	txnReg := commands.RegisterTxn(router, hub)
 	pubsubReg := commands.RegisterPubSub(router)
 	commands.SetNotifyPublisher(pubsubReg.Publish)
+	commands.SetInvalidatePublisher(pubsubReg.Publish)
 	luaTimeout, err := cfg.Lua.EffectiveTimeLimit()
 	if err != nil {
 		return fmt.Errorf("invalid lua.time_limit: %w", err)

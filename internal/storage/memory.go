@@ -258,7 +258,7 @@ func (p *Pebble) evictOne(ctx context.Context) bool {
 	if !found {
 		return false
 	}
-	if err := p.Delete(ctx, []byte(victimKey)); err != nil {
+	if err := p.deleteInternal(ctx, []byte(victimKey)); err != nil {
 		return false
 	}
 	p.evicted.Add(1)
