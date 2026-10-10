@@ -15,11 +15,12 @@ import (
 )
 
 // 连接层命令：HELLO/SELECT/QUIT/ECHO/RESET/COMMAND。
-// 全部无 key、非写，WriteCommandSet 不登记；key 路由走 cluster.KeysOf 默认直通。
+// 全部无 key；SWAPDB 为写命令（单库下 no-op）入 WriteCommandSet，key 路由走 cluster.KeysOf 默认直通。
 
 var connMeta = []acl.Meta{
 	{Name: "HELLO", Category: "connection", Keys: acl.KeySpec{First: -1}},
 	{Name: "SELECT", Category: "connection", Keys: acl.KeySpec{First: -1}},
+	{Name: "SWAPDB", Category: "connection", Keys: acl.KeySpec{First: -1}},
 	{Name: "QUIT", Category: "connection", Keys: acl.KeySpec{First: -1}},
 	{Name: "ECHO", Category: "connection", Keys: acl.KeySpec{First: -1}},
 	{Name: "RESET", Category: "connection", Keys: acl.KeySpec{First: -1}},
@@ -154,6 +155,7 @@ func RegisterConn(r *network.Router, st AuthStore, auth *AuthRegistry) *ConnRegi
 	h := &connHandler{router: r, store: st, auth: auth, conns: c}
 	r.Register("HELLO", h.hello)
 	r.Register("SELECT", h.select_)
+	r.Register("SWAPDB", h.swapdb)
 	r.Register("QUIT", h.quit)
 	r.Register("ECHO", h.echo)
 	r.Register("RESET", h.reset)
@@ -283,6 +285,27 @@ func (h *connHandler) select_(ctx context.Context, args []protocol.Value) protoc
 	return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
 }
 
+// swapdb 单库 no-op：0 0 回 OK，任一索引非 0 与 SELECT 同文案报越界。
+func (h *connHandler) swapdb(_ context.Context, args []protocol.Value) protocol.Value {
+	if len(args) != 2 {
+		return errValueStr("ERR wrong number of arguments for 'swapdb' command")
+	}
+	for _, a := range args {
+		s, ok := argString(a)
+		if !ok {
+			return errValueStr("ERR value is not an integer or out of range")
+		}
+		idx, err := strconv.Atoi(s)
+		if err != nil {
+			return errValueStr("ERR value is not an integer or out of range")
+		}
+		if idx != 0 {
+			return errValueStr("ERR DB index is out of range")
+		}
+	}
+	return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
+}
+
 func (h *connHandler) quit(ctx context.Context, args []protocol.Value) protocol.Value {
 	if len(args) != 0 {
 		return errValueStr("ERR wrong number of arguments for 'quit' command")
@@ -368,6 +391,18 @@ func (h *connHandler) command(ctx context.Context, args []protocol.Value) protoc
 			return errValueStr("ERR wrong number of arguments for 'command|docs' command")
 		}
 		return h.commandDocs()
+	case "LIST":
+		if len(args) != 1 {
+			bad, _ := argString(args[1])
+			return errValueStr(fmt.Sprintf("ERR unknown argument '%s' for 'command|list' command", bad))
+		}
+		names := h.router.Commands()
+		sort.Strings(names)
+		out := make([]protocol.Value, 0, len(names))
+		for _, n := range names {
+			out = append(out, protocol.BulkOf(strings.ToUpper(n)))
+		}
+		return protocol.Value{Kind: protocol.KindArray, Elems: out}
 	case "GETKEYS":
 		if len(args) < 2 {
 			return errValueStr("ERR wrong number of arguments for 'command|getkeys' command")

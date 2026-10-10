@@ -15,6 +15,7 @@ var stringExtraMeta = []acl.Meta{
 	{Name: "STRLEN", Category: "string", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "SETRANGE", Category: "string", Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "GETRANGE", Category: "string", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "SUBSTR", Category: "string", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
 }
 
 func (s *stringHandler) registerExtra(r *network.Router) {
@@ -25,6 +26,7 @@ func (s *stringHandler) registerExtra(r *network.Router) {
 	r.Register("STRLEN", s.strlen)
 	r.Register("SETRANGE", s.setrange)
 	r.Register("GETRANGE", s.getrange)
+	r.Register("SUBSTR", s.getrange)
 }
 
 func (s *stringHandler) append(ctx context.Context, args []protocol.Value) protocol.Value {
