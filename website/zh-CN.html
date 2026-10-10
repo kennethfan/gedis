@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gedis — 基于 Go 的 Redis 兼容存储引擎</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+<h1>Gedis</h1>
+<p class="tagline">基于 Pebble（纯 Go LSM-tree）的 Redis 兼容存储引擎，用 Go 实现。</p>
+<nav class="lang"><a href="index.html">English</a> · <a href="https://github.com/kennethfan/gedis">GitHub</a></nav>
+<div class="btn-row">
+<a class="btn primary" href="https://github.com/kennethfan/gedis">在 GitHub 查看</a>
+<a class="btn" href="#quick-start">快速开始</a>
+</div>
+</header>
+
+<section>
+<h2>功能特性</h2>
+<ul class="features">
+<li><strong>Redis 兼容</strong> — RESP2/RESP3，可作为 drop-in 替换（<code>redis-cli</code> 直连）</li>
+<li><strong>Pebble 存储引擎</strong> — 纯 Go，无 CGo 依赖，WAL + 可调 fsync</li>
+<li><strong>数据结构</strong> — String、Hash、List、Set、Sorted Set、Geo、Bitmap、HyperLogLog、Stream（含自适应编码；Geo 复用 ZSet，Bitmap 复用 String）</li>
+<li><strong>过期</strong> — key 级 TTL + Hash field 过期（HEXPIRE 系），被动 + 后台主动删除</li>
+<li><strong>主从复制</strong> — PSYNC（全量 RDB + backlog 部分同步），只读复本</li>
+<li><strong>内存管理</strong> — maxmemory + 8 种逐出策略（allkeys/volatile × lru/lfu/random/ttl），CONFIG 运行时调整</li>
+<li><strong>Keyspace 通知</strong> — <code>CONFIG SET notify-keyspace-events KEA</code> 全类事件（g/s/h/l/z/x/e/m），keyspace + keyevent 双频道</li>
+<li><strong>实时命令流</strong> — MONITOR / CLIENT MONITOR，per-conn 串行出站管道 + per-conn 写锁</li>
+<li><strong>客户端缓存</strong> — CLIENT TRACKING（on/off、BCAST/PREFIX、OPTIN/CACHING、OPTOUT、NOLOOP）；失效走 RESP3 push / RESP2 <code>__redis__:invalidate</code></li>
+<li><strong>监控</strong> — INFO 六 section + SLOWLOG + Prometheus <code>/metrics</code></li>
+<li><strong>服务端 TLS</strong> — 监听口 <code>[server] tls_cert/tls_key</code></li>
+</ul>
+</section>
+
+<section id="quick-start">
+<h2>快速开始</h2>
+<pre><code># 编译（纯静态二进制，无 CGo）
+make build
+
+# 启动（默认 gedis.toml，端口 6380）
+./bin/gedis
+
+# 使用 redis-cli 连接
+redis-cli -p 6380</code></pre>
+</section>
+
+<section>
+<h2>Docker</h2>
+<pre><code># 构建镜像（多阶段，scratch 运行时约 25MB）
+make docker
+
+# 单节点
+docker run -d -p 6380:6380 -v gedis-data:/data gedis:latest
+
+# 一主一从本地测试
+make compose-up
+redis-cli -p 6381 REPLICAOF 127.0.0.1 6380
+make compose-down</code></pre>
+</section>
+
+<section>
+<h2>配置</h2>
+<p>TOML 格式（见 <code>gedis.toml</code>，容器内用 <code>gedis.docker.toml</code>）：</p>
+<pre><code>[server]
+host = "127.0.0.1"
+port = 6380
+
+[storage]
+datadir = "./data"
+
+[memory]
+maxmemory = 1073741824
+policy = "allkeys-lru"      # 或 volatile-lru
+
+[persistence]
+appendonly = true
+fsync = "everysec"          # always | everysec | no
+
+[metrics]
+enabled = false
+port = 9121</code></pre>
+<p>运行时调整：<code>CONFIG SET maxmemory &lt;bytes&gt;</code>，<code>CONFIG SET maxmemory-policy &lt;...&gt;</code>，<code>CONFIG GET maxmemory</code>，<code>CONFIG SET notify-keyspace-events &lt;KgEgse...&gt;</code>。</p>
+</section>
+
+<section>
+<h2>主从复制</h2>
+<pre><code># 从库执行（只读模式自动开启）
+REPLICAOF &lt;master-host&gt; &lt;master-port&gt;
+
+# 升主
+REPLICAOF NO ONE</code></pre>
+</section>
+
+<section>
+<h2>监控</h2>
+<pre><code>INFO [server|clients|memory|stats|replication|keyspace]
+SLOWLOG GET [n] | LEN | RESET
+curl localhost:9121/metrics   # 需 [metrics] enabled</code></pre>
+</section>
+
+<section>
+<h2>Scope（v1 未实现）</h2>
+<p>RDB 仅只读导入（<code>--load-rdb</code> 启动时把真机 RDB 一次性装入空库）；BGSAVE/SAVE/BGREWRITEAOF 诚实报错（无 RDB/AOF 导出）与 CONFIG REWRITE（诚实拒绝）。</p>
+</section>
+
+<footer>
+<p>MIT License · <a href="https://github.com/kennethfan/gedis">kennethfan/gedis</a></p>
+</footer>
+
+</div>
+</body>
+</html>
