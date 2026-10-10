@@ -144,11 +144,12 @@
 
 先做：LOAD/FLUSH/LIST/FCALL/FCALL_RO/STATS；DUMP/RESTORE（序列化格式自定+文档）可拆第二笔。
 
-### Phase 7: Keyspace 通知（P1，M，跨切面）
+### Phase 7: Keyspace 通知（P1，M，跨切面）—— ✅ 已交付 2026-10-10（commit 5a783c5..f45c2dc）
 
-- `CONFIG SET notify-keyspace-events <string>` 生效（Phase 2 已占位）。
-- 发布点：在 Hub/写路径统一出口挂钩（先审计全部写命令的落盘点，列清单再动手——漏一个就是静默丢事件）。
-- `__keyspace@0__` / `__keyevent@0__` 频道复用现有 PubSub 通道。
+- `CONFIG SET notify-keyspace-events <string>` 生效（Phase 2 已占位）。**已交付**：TEA 支持，KEA 全量生效。
+- 发布点：在 Hub/写路径统一出口挂钩（先审计全部写命令的落盘点，列清单再动手——漏一个就是静默丢事件）。**已交付**：generic/string/hash/list/set/zset/stream/expired/evicted 全类发布点。
+- `__keyspace@0__` / `__keyevent@0__` 频道复用现有 PubSub 通道。**已交付**：K/E 双频道，三重门。
+- 遗留：d/m/n/o/c 配置字母接受但无对应事件；MOVE 事件单库不可达；ZPOPMIN/ZPOPMAX/BZPOP\* 等事件表外命令不发事件（见 CONTEXT 偏差记录）。
 
 ### Phase 8: CLIENT TRACKING（P1，M；依赖 Phase 1 的 RESP3 标记）
 
@@ -156,10 +157,11 @@
 - 先做 NOLOOP 默认语义 + BCAST；OPTIN/OPTOUT 的 `CLIENT CACHING yes/no` 配合。
 - 依赖 Phase 7 的失效事件源（key 修改事件复用通知管线，只发给 tracking 表）。
 
-### Phase 9: 逐出策略补齐（P1，S-M；LFU 依赖 Phase 2 的 OBJECT FREQ 字段位）
+### Phase 9: 逐出策略补齐（P1，S-M；LFU 依赖 Phase 2 的 OBJECT FREQ 字段位）—— ✅ 已交付 2026-10-10（commit 365c950）
 
-- 易：`noeviction`、`allkeys-random`、`volatile-random`、`volatile-ttl`（CONFIG 接入 + sampling 复用 LRU 路径）。
-- 中：LFU（`allkeys-lfu`/`volatile-lfu`）：每个 key 存 24bit 计数器（参考 Redis `object.freq`），`OBJECT FREQ`/`SET`/`GET` 更新衰减；存储前缀内加字段（注意 Pebble 编码版本兼容——走 datastruct 版本位或独立 `freq:` 前缀）。
+- 易：`noeviction`、`allkeys-random`、`volatile-random`、`volatile-ttl`（CONFIG 接入 + sampling 复用 LRU 路径）。**已交付**。
+- 中：LFU（`allkeys-lfu`/`volatile-lfu`）：每个 key 存 24bit 计数器（参考 Redis `object.freq`），`OBJECT FREQ`/`SET`/`GET` 更新衰减；存储前缀内加字段（注意 Pebble 编码版本兼容——走 datastruct 版本位或独立 `freq:` 前缀）。**已交付（简化 LFU：+1 饱和 255，无概率增量/时间衰减，见 CONTEXT 偏差记录）**。
+- 遗留：LFU 未实现概率增量（counter 抽样）与时间衰减；OBJECT IDLETIME/FREQ 读取会刷新统计。
 
 ### Phase 10: RDB/AOF 互操作（P1→P2，XL；可长期挂起）
 

@@ -11,8 +11,11 @@ A Redis-compatible storage engine in Go, backed by Pebble (pure-Go LSM-tree).
 - **Data structures** — String, Hash, List, Set, Sorted Set, Geo, Bitmap, HyperLogLog, Stream (with adaptive encodings; Geo reuses ZSet, Bitmap reuses String)
 - **Expiration** — key-level TTL + Hash field expiration (HEXPIRE family), lazy + background active deletion
 - **Replication** — PSYNC (full RDB + backlog partial sync), read-only replicas
-- **Memory management** — maxmemory + allkeys-lru / volatile-lru, runtime CONFIG
+- **Memory management** — maxmemory + 8 eviction policies (allkeys/volatile × lru/lfu/random/ttl), runtime CONFIG
+- **Keyspace notifications** — `CONFIG SET notify-keyspace-events KEA` full-class events (g/s/h/l/z/x/e/m), keyspace + keyevent channels
+- **New commands** — GETSET/SETEX/PSETEX/SETNX/TOUCH, LMOVE/BLMOVE/RPOPLPUSH/BRPOPLPUSH, READONLY/READWRITE, OBJECT IDLETIME/FREQ
 - **Monitoring** — six-section INFO + SLOWLOG + Prometheus `/metrics`
+- **Server-side TLS** — listener-side `[server] tls_cert/tls_key` (outbound dial-side TLS follows `[tls]` config via `tlsdial`)
 
 ## Quick Start
 
@@ -67,7 +70,7 @@ enabled = false
 port = 9121
 ```
 
-Runtime tuning: `CONFIG SET maxmemory <bytes>`, `CONFIG SET maxmemory-policy <allkeys-lru|volatile-lru>`, `CONFIG GET maxmemory`.
+Runtime tuning: `CONFIG SET maxmemory <bytes>`, `CONFIG SET maxmemory-policy <allkeys-lru|allkeys-lfu|allkeys-random|volatile-lru|volatile-lfu|volatile-random|volatile-ttl|noeviction>`, `CONFIG GET maxmemory`, `CONFIG SET notify-keyspace-events <KgEgse...>`.
 
 ## Replication
 
@@ -119,7 +122,7 @@ make bench   # Benchmarks
 
 ## Scope (not yet implemented)
 
-Server-side TLS listener (outbound dial-side TLS follows `[tls]` config via `tlsdial`).
+RDB/AOF persistence (BGSAVE/SAVE return an honest error; no RDB/AOF), CLIENT TRACKING (Phase 8), and remaining gap commands (HEXPIRETIME/HPEXPIRETIME, MONITOR, SUBSTR, SWAPDB, COMMAND LIST, CONFIG REWRITE).
 
 ## License
 

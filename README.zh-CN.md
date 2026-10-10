@@ -11,8 +11,11 @@
 - **数据结构** — String、Hash、List、Set、Sorted Set、Geo、Bitmap、HyperLogLog、Stream（含自适应编码；Geo 复用 ZSet，Bitmap 复用 String）
 - **过期** — key 级 TTL + Hash field 过期（HEXPIRE 系），被动 + 后台主动删除
 - **主从复制** — PSYNC（全量 RDB + backlog 部分同步），只读复本
-- **内存管理** — maxmemory + allkeys-lru / volatile-lru，CONFIG 运行时调整
+- **内存管理** — maxmemory + 8 种逐出策略（allkeys/volatile × lru/lfu/random/ttl），CONFIG 运行时调整
+- **Keyspace 通知** — `CONFIG SET notify-keyspace-events KEA` 全类事件（g/s/h/l/z/x/e/m），keyspace + keyevent 双频道
+- **新增命令** — GETSET/SETEX/PSETEX/SETNX/TOUCH，LMOVE/BLMOVE/RPOPLPUSH/BRPOPLPUSH，READONLY/READWRITE，OBJECT IDLETIME/FREQ
 - **监控** — INFO 六 section + SLOWLOG + Prometheus `/metrics`
+- **服务端 TLS** — 监听口 `[server] tls_cert/tls_key`（出向 dial 端 TLS 走 `[tls]` 配置，见 tlsdial）
 
 ## Quick Start
 
@@ -67,7 +70,7 @@ enabled = false
 port = 9121
 ```
 
-运行时调整：`CONFIG SET maxmemory <bytes>`，`CONFIG SET maxmemory-policy <allkeys-lru|volatile-lru>`，`CONFIG GET maxmemory`。
+运行时调整：`CONFIG SET maxmemory <bytes>`，`CONFIG SET maxmemory-policy <allkeys-lru|allkeys-lfu|allkeys-random|volatile-lru|volatile-lfu|volatile-random|volatile-ttl|noeviction>`，`CONFIG GET maxmemory`，`CONFIG SET notify-keyspace-events <KgEgse...>`。
 
 ## Replication
 
@@ -119,7 +122,7 @@ make bench   # 基准测试
 
 ## Scope（v1 未实现）
 
-TLS（传输加密）。
+RDB/AOF 持久化（BGSAVE/SAVE 诚实报错；无 RDB/AOF），CLIENT TRACKING（Phase 8），剩余缺口命令（HEXPIRETIME/HPEXPIRETIME、MONITOR、SUBSTR、SWAPDB、COMMAND LIST、CONFIG REWRITE）。
 
 ## License
 
