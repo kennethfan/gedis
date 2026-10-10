@@ -39,6 +39,27 @@ type ConnState struct {
 	// ReadOnly 记录 READONLY 置位、READWRITE 清零的 per-conn 标志；
 	// 集群副本读路由落地前仅存不读。
 	ReadOnly bool
+	// 以下为 CLIENT TRACKING/CACHING 的 per-conn 状态：Tracking 为主开关，
+	// 其余为 flags（BCAST/OPTIN/OPTOUT/NOLOOP）与 PREFIX 列表；CachingYes
+	// 由 CLIENT CACHING 置位、被 OPTIN 下一条带 key 命令消费复位。
+	Tracking   bool
+	BCast      bool
+	OptIn      bool
+	OptOut     bool
+	NoLoop     bool
+	Prefixes   []string
+	CachingYes bool
+}
+
+// TrackingCfg 是 CLIENT TRACKING 配置的读写快照（按值传入/传出，避免
+// 锁外直接触碰 ConnState 内的 Prefixes 切片）。
+type TrackingCfg struct {
+	On       bool
+	BCast    bool
+	OptIn    bool
+	OptOut   bool
+	NoLoop   bool
+	Prefixes []string
 }
 
 // ConnInfo 是 CLIENT LIST 用的连接快照行。
@@ -117,6 +138,59 @@ func (c *ConnRegistry) SetName(conn net.Conn, name string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.state(conn).Name = name
+}
+
+// SetTracking 写入 CLIENT TRACKING 的配置快照（Prefixes 拷贝入库，
+// 防调用方后续改切片逃逸锁外）。
+func (c *ConnRegistry) SetTracking(conn net.Conn, cfg TrackingCfg) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st := c.state(conn)
+	st.Tracking = cfg.On
+	st.BCast = cfg.BCast
+	st.OptIn = cfg.OptIn
+	st.OptOut = cfg.OptOut
+	st.NoLoop = cfg.NoLoop
+	st.Prefixes = append([]string(nil), cfg.Prefixes...)
+}
+
+// TrackingOf 返回 TRACKING 配置快照（Prefixes 亦拷贝，锁外只读）。
+func (c *ConnRegistry) TrackingOf(conn net.Conn) TrackingCfg {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st := c.state(conn)
+	return TrackingCfg{
+		On:       st.Tracking,
+		BCast:    st.BCast,
+		OptIn:    st.OptIn,
+		OptOut:   st.OptOut,
+		NoLoop:   st.NoLoop,
+		Prefixes: append([]string(nil), st.Prefixes...),
+	}
+}
+
+// SetCaching 写入 CLIENT CACHING 的 yes/no 结果。
+func (c *ConnRegistry) SetCaching(conn net.Conn, v bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.state(conn).CachingYes = v
+}
+
+// CachingYesOf 读 CachingYes 当前值（测试与 CACHING 往返断言用）。
+func (c *ConnRegistry) CachingYesOf(conn net.Conn) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.state(conn).CachingYes
+}
+
+// ConsumeCaching 读 CachingYes 并无条件复位（OPTIN 读注册消费一次语义）。
+func (c *ConnRegistry) ConsumeCaching(conn net.Conn) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st := c.state(conn)
+	v := st.CachingYes
+	st.CachingYes = false
+	return v
 }
 
 func (c *ConnRegistry) NameOf(conn net.Conn) string {

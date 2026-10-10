@@ -28,6 +28,8 @@ func RegisterServer(r *network.Router, kv KV, stats *network.Stats, hub *replica
 		acl.RegisterMeta(m)
 	}
 	h := &serverHandler{kv: kv, stats: stats, hub: hub, conns: conns, deps: deps}
+	h.tracks = NewTrackTable()
+	InstallTrackingHook(r, h.conns, h.tracks)
 	r.Register("DBSIZE", h.dbsize)
 	r.Register("FLUSHDB", h.flushdb)
 	r.Register("FLUSHALL", h.flushall)
@@ -66,11 +68,12 @@ var serverMeta = []acl.Meta{
 }
 
 type serverHandler struct {
-	kv    KV
-	stats *network.Stats
-	hub   *replication.Hub
-	conns *ConnRegistry
-	deps  ServerDeps
+	kv     KV
+	stats  *network.Stats
+	hub    *replication.Hub
+	conns  *ConnRegistry
+	deps   ServerDeps
+	tracks *TrackTable
 }
 
 func (h *serverHandler) monitor(ctx context.Context, args []protocol.Value) protocol.Value {
@@ -287,6 +290,10 @@ func (h *serverHandler) client(ctx context.Context, args []protocol.Value) proto
 			return errValueStr("ERR wrong number of arguments for 'client|monitor' command")
 		}
 		return startMonitor(ctx)
+	case "TRACKING":
+		return h.tracking(ctx, args[1:])
+	case "CACHING":
+		return h.caching(ctx, args[1:])
 	default:
 		return errValueStr(fmt.Sprintf("ERR unknown subcommand '%s' for 'client' command", sub))
 	}

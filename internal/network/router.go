@@ -39,11 +39,17 @@ type Router struct {
 	intercept   InterceptFunc
 	auth        AuthorizerStore
 	monitorHook MonitorHookFunc
+	readHook    ReadHookFunc
 }
 
 // MonitorHookFunc 是 MONITOR 观测钩子：auth 通过、handler 命中后、执行前调用；
 // 实现必须非阻塞（内部用有界缓冲）。
 type MonitorHookFunc func(ctx context.Context, name string, args []protocol.Value)
+
+// ReadHookFunc 是读注册钩子：auth 通过、读命令 handler 成功返回后、回包前
+// 调用（keys 已非空、写命令已在 Dispatch 层过滤）；实现必须非阻塞，
+// 且不得向 conn 写任何数据（跟踪表只做内存维护）。
+type ReadHookFunc func(ctx context.Context, name string, keys []string)
 
 func NewRouter() *Router {
 	return &Router{handlers: make(map[string]Handler)}
@@ -121,6 +127,13 @@ func (r *Router) SetMonitorHook(fn MonitorHookFunc) {
 	r.monitorHook = fn
 }
 
+// SetReadHook 挂读注册钩子（启动时调一次）；传 nil 卸载。
+func (r *Router) SetReadHook(fn ReadHookFunc) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.readHook = fn
+}
+
 // ChainIntercept 追挂分发前钩子：与既有钩子按注册顺序依次尝试，首个
 // handled=true 者胜出。供多 registry 共存时用（如 Txn + PubSub 的订阅态拦截）。
 func (r *Router) ChainIntercept(fn InterceptFunc) {
@@ -171,9 +184,11 @@ func (r *Router) Dispatch(ctx context.Context, cmd protocol.Value) protocol.Valu
 	h, ok := r.handlers[name]
 	stats := r.stats
 	readonly := r.readonly && r.writeCmds[name]
+	writable := r.writeCmds[name]
 	intercept := r.intercept
 	auth := r.auth
 	monitorHook := r.monitorHook
+	readHook := r.readHook
 	r.mu.RUnlock()
 	if intercept != nil {
 		if reply, handled := intercept(ctx, cmd); handled {
@@ -238,6 +253,11 @@ func (r *Router) Dispatch(ctx context.Context, cmd protocol.Value) protocol.Valu
 				}
 			}
 			stats.AddSlow(strings.ToLower(name), args, micros)
+		}
+	}
+	if readHook != nil && !writable && reply.Kind != protocol.KindError {
+		if keys := extractKeys(name, cmd.Elems[1:]); len(keys) > 0 {
+			readHook(ctx, name, keys)
 		}
 	}
 	return reply
