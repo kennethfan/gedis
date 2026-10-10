@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"fmt"
@@ -64,7 +65,8 @@ func listenMain(host string, port int, tlsCfg config.TLS) (net.Listener, error) 
 	}), nil
 }
 
-func loadClusterSnapshot(path string, topo *cluster.Topology) error {	data, err := os.ReadFile(path)
+func loadClusterSnapshot(path string, topo *cluster.Topology) error {
+	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -83,6 +85,7 @@ func loadClusterSnapshot(path string, topo *cluster.Topology) error {	data, err 
 
 func run() error {
 	configPath := flag.String("config", "gedis.toml", "TOML 配置文件路径")
+	loadRDB := flag.String("load-rdb", "", "启动时从真机 RDB 文件一次性导入（仅允许空库）")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)
@@ -110,6 +113,11 @@ func run() error {
 		return fmt.Errorf("open store: %w", err)
 	}
 	defer func() { _ = store.Close() }()
+	if *loadRDB != "" {
+		if err := loadRDBFile(context.Background(), store, *loadRDB); err != nil {
+			return fmt.Errorf("load rdb: %w", err)
+		}
+	}
 	store.SetEvictHook(commands.OnEvicted)
 	store.SetChangeHook(commands.InvalidateChange)
 

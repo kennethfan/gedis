@@ -124,7 +124,7 @@ make bench   # 基准测试
 
 ## Scope（v1 未实现）
 
-RDB/AOF 持久化（BGSAVE/SAVE 诚实报错；无 RDB/AOF）与 CONFIG REWRITE（诚实拒绝）。
+RDB 仅只读导入（`--load-rdb` 启动时把真机 RDB 一次性装入空库）；BGSAVE/SAVE/BGREWRITEAOF 诚实报错（无 RDB/AOF 导出）与 CONFIG REWRITE（诚实拒绝）。
 
 ## License
 

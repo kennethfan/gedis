@@ -66,7 +66,7 @@ Gedis 使用 Pebble 作为底层存储引擎，通过前缀方案在同一个 Pe
 - **新命令**：GETSET/SETEX/PSETEX/SETNX/TOUCH；LMOVE/BLMOVE/RPOPLPUSH/BRPOPLPUSH；READONLY/READWRITE（注册级）。
 - **WriteCommandSet 审计补漏 28 条**（含 ZADD 整族、EVAL/EVALSHA、MIGRATE/RESTORE、HEXPIRE 族、XREADGROUP/XACK/XCLAIM/XAUTOCLAIM）。
 - **SAVE** 注册为诚实失败（与 BGSAVE 同：`ERR not supported on this engine: no RDB/AOF persistence`）。
-- **未做（batch1 时点，见下文 batch2 段接续）**：Phase 8（CLIENT TRACKING，batch2 已交付）与 Phase 10（RDB/AOF，仍未做）；缺口命令 HEXPIRETIME/HPEXPIRETIME、MONITOR、SUBSTR、SWAPDB、COMMAND LIST、CONFIG REWRITE 等均已在 batch2 交付。
+- **未做（batch1 时点，见下文接续段）**：Phase 8（CLIENT TRACKING，batch2 已交付）与 Phase 10（RDB 只读加载，见下文 Phase 10 段，已交付）；缺口命令 HEXPIRETIME/HPEXPIRETIME、MONITOR、SUBSTR、SWAPDB、COMMAND LIST、CONFIG REWRITE 等均已在 batch2 交付。
 
 ### 偏差记录（T1-T8 report 汇总）
 
@@ -115,6 +115,21 @@ Gedis 使用 Pebble 作为底层存储引擎，通过前缀方案在同一个 Pe
 1. DUMP payload 为自定帧（真机为 RDB 帧，无法复刻）：跨引擎不可互恢复，真机 payload 进 RESTORE 落 `ERR DUMP payload version or checksum are wrong`（已 pin）；文档与 roadmap 注明。
 2. 真机单执行 vs gedis 并发执行：KILL 沿用既有保守语义（任一脏则整体 UNKILLABLE，杀一半留一半不允许）；STATS 只展示最早在飞者。
 3. KILL 脏函数测试依赖 5s 执行超时兜底（单测约 +5s）。
+
+## 2026-10-11 批次交付（Phase 10：RDB 只读加载）
+
+### 交付声明
+
+- **RDB 解析器 `internal/rdb` 完成**：RDB version 11 pin 死（非 11 拒载）；header / SELECTDB / EXPIRETIME(_MS) / EOF / AUX 跳过；string（含整数/LZF）/ hash / list（quicklist2）/ set（intset）/ zset（含 zset2）/ stream（listpack，ver 门控 v1/v2/v3）/ HLL（sparse + dense）；CRC64 body 校验（真机为标准 CRC64，无取反、初值 0，fixture 尾 ground truth 实证）。
+- **导入器完成**：RDB 条目 → `datastruct.EncodeX` → Pebble WriteBatch；仅 DB 0（多库拒载）；已过期条目跳过；sparse HLL 先 densify；stream 全量（条目 / PEL / 消费组，owner 回填）。
+- **`--load-rdb` 接线完成**：启动时一次性导入，仅允许空库（非空拒载 `database is not empty`）；fixtures 来自本地 7.2.6 真机 dump（`internal/rdb/testdata`，RDB 地形以 walker 实证为准）。
+- **BGSAVE/SAVE/BGREWRITEAOF 保持诚实报错**（迁出方向不在承诺内）。
+
+### 偏差记录
+
+1. 只收 DB 0；AUX 字段跳过；module 类型拒载；RDB version 非 11 拒载。
+2. 迁出（产 RDB）未做：BGSAVE/SAVE/BGREWRITEAOF 仍诚实报错；P2 默认不做。
+3. fixtures 为 7.2.6 实机 dump，RDB 版本漂移需重造 fixtures。
 
 ## References
 

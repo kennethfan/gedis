@@ -124,7 +124,7 @@ make bench   # Benchmarks
 
 ## Scope (not yet implemented)
 
-RDB/AOF persistence (BGSAVE/SAVE return an honest error; no RDB/AOF) and CONFIG REWRITE (honest rejection).
+RDB import only (`--load-rdb` loads a real Redis RDB file into an empty database at startup); BGSAVE/SAVE/BGREWRITEAOF return an honest error (no RDB/AOF export) and CONFIG REWRITE (honest rejection).
 
 ## License
 

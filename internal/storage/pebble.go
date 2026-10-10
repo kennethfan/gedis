@@ -191,6 +191,23 @@ func (p *Pebble) deleteInternal(ctx context.Context, key []byte) error {
 	return nil
 }
 
+// HasAny 只看首键是否存在，供 --load-rdb 空库守卫用；O(1)，不掃全库。
+func (p *Pebble) HasAny(ctx context.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	iter, err := p.db.NewIter(&pebble.IterOptions{})
+	if err != nil {
+		return false, fmt.Errorf("storage: hasany: %w", err)
+	}
+	defer func() { _ = iter.Close() }()
+	ok := iter.First() && iter.Valid()
+	if err := iter.Error(); err != nil {
+		return false, fmt.Errorf("storage: hasany: %w", err)
+	}
+	return ok, nil
+}
+
 // Scan 返回带 prefix 前缀的全部 key 拷贝（有序）。KEYS 命令用；阻塞式全量扫描。
 func (p *Pebble) Scan(ctx context.Context, prefix []byte) ([][]byte, error) {
 	if err := ctx.Err(); err != nil {

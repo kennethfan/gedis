@@ -165,9 +165,9 @@
 - 中：LFU（`allkeys-lfu`/`volatile-lfu`）：每个 key 存 24bit 计数器（参考 Redis `object.freq`），`OBJECT FREQ`/`SET`/`GET` 更新衰减；存储前缀内加字段（注意 Pebble 编码版本兼容——走 datastruct 版本位或独立 `freq:` 前缀）。**已交付（简化 LFU：+1 饱和 255，无概率增量/时间衰减，见 CONTEXT 偏差记录）**。
 - 遗留：LFU 未实现概率增量（counter 抽样）与时间衰减；OBJECT IDLETIME/FREQ 读取会刷新统计。
 
-### Phase 10: RDB/AOF 互操作（P1→P2，XL；可长期挂起）
+### Phase 10: RDB/AOF 互操作（P1→P2，XL）—— ✅ 已交付 2026-10-11（RDB 只读加载；迁出未做）
 
-- 最小可用：RDB 只读加载（启动 `--load-rdb` 把真机 RDB 转入 Pebble；自研解析器，以真机 dump 为 fixtures 回归）。
+- 最小可用：RDB 只读加载（启动 `--load-rdb` 把真机 RDB 转入 Pebble；自研解析器，以真机 dump 为 fixtures 回归）。**已交付（`internal/rdb` + `--load-rdb`，仅 DB 0，RDB version 11 pin 死，见 CONTEXT 偏差记录）**。
 - 完整 AOF/RDB 双写是存储引擎级改造，不在 P1 承诺内；本路线交付到"可迁入"，不承诺"可迁出"。
 
 ---
@@ -183,7 +183,7 @@ Phase 0 ──→ Phase 1 ──→ Phase 2 ──→ Phase 3
          (tracking)      Phase 7 ──→ Phase 8
               需要 Phase 7 事件源     (tracking)
 Phase 4/5/6 独立（任意顺序），建议 4 → 5 → 6（由小到大）。
-Phase 10 独立，可挂起。
+Phase 10 独立，已交付（只读加载）。
 ```
 
 ## 工作量总览
@@ -200,4 +200,4 @@ Phase 10 独立，可挂起。
 | 7 通知 | M | 跨切面，审计先行 |
 | 8 Tracking | M | 需 1+7 |
 | 9 逐出 | S-M | |
-| 10 RDB | XL | 可挂起，先只读加载 |
+| 10 RDB | XL | ✅ 已交付（只读加载） |
