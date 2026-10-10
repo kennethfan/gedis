@@ -53,11 +53,11 @@ func invalidateValue(key string) protocol.Value {
 }
 
 // expectNoFrames 断言 conn 在窗口内零帧（多一条即 FAIL）。
-func expectNoFrames(t testing.TB, conn net.Conn, d time.Duration) {
+func expectNoFrames(t testing.TB, conn net.Conn, d time.Duration, msgAndArgs ...interface{}) {
 	t.Helper()
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(d)))
 	_, err := protocol.Decode(bufio.NewReader(conn))
-	require.Error(t, err, "零多余帧")
+	require.Error(t, err, msgAndArgs...)
 	require.NoError(t, conn.SetReadDeadline(time.Time{}))
 }
 

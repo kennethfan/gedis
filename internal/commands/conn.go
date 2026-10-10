@@ -230,14 +230,16 @@ func (c *ConnRegistry) Reset(conn net.Conn) {
 // ConnClosed 丢弃连接状态，并同步清理跟踪表项与失效推送管道。
 func (c *ConnRegistry) ConnClosed(conn net.Conn) {
 	c.mu.Lock()
-	st, ok := c.m[conn]
 	tracks := c.tracks
-	delete(c.m, conn)
+	_, exists := c.m[conn]
 	c.mu.Unlock()
-	if ok && tracks != nil {
-		tracks.RemoveConn(st.ID)
+	if exists && tracks != nil {
+		untrack(conn, c, tracks)
 	}
 	DropInvalidationPipe(conn)
+	c.mu.Lock()
+	delete(c.m, conn)
+	c.mu.Unlock()
 }
 
 type connHandler struct {

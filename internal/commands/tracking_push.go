@@ -81,7 +81,17 @@ func (inv *invalidation) emit(ctx context.Context, op byte, rawKey []byte) {
 	if key == "" {
 		return
 	}
-	observers := inv.tracks.ConnsFor(key)
+	ids := inv.tracks.ConnsFor(key)
+	ids = append(ids, inv.tracks.BcastFor(key)...)
+	seen := make(map[int64]struct{}, len(ids))
+	observers := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		observers = append(observers, id)
+	}
 	if len(observers) == 0 {
 		return
 	}
@@ -132,6 +142,7 @@ func (inv *invalidation) push(conn net.Conn, frame string) {
 	inv.pipeMu.Unlock()
 	if !p.Enqueue(frame) {
 		inv.dropPipe(conn)
+		untrack(conn, inv.conns, inv.tracks)
 	}
 }
 
