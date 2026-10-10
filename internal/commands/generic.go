@@ -176,6 +176,7 @@ func (h *genericHandler) copy(ctx context.Context, args []protocol.Value) protoc
 			return errValue(err)
 		}
 	}
+	Notify("g", "copy_to", dst)
 	return protocol.Value{Kind: protocol.KindInteger, I: 1}
 }
 
@@ -245,6 +246,8 @@ func (h *genericHandler) rename(ctx context.Context, args []protocol.Value, nx b
 			return errValue(err)
 		}
 	}
+	Notify("g", "rename_from", src)
+	Notify("g", "rename_to", dst)
 	if nx {
 		return protocol.Value{Kind: protocol.KindInteger, I: 1}
 	}
@@ -536,13 +539,19 @@ func (h *genericHandler) sort(ctx context.Context, args []protocol.Value) protoc
 				out = append(out, string(v.Bulk))
 			}
 		}
+		oldExisted := false
 		if draw, de, derr := lookupRaw(ctx, h.kv, o.store); derr == nil {
 			h.deleteByRaw(ctx, draw, de, o.store)
+			oldExisted = true
 		} else if !isNotFound(derr) {
 			return errValue(derr)
 		}
 		if werr := h.lists().writeList(ctx, o.store, out, 0); werr != nil {
 			return errValue(werr)
+		}
+		Notify("g", "sortstore", o.store)
+		if len(out) == 0 && oldExisted {
+			Notify("g", "del", o.store)
 		}
 		return protocol.Value{Kind: protocol.KindInteger, I: int64(len(out))}
 	}

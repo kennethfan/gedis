@@ -132,6 +132,7 @@ func (s *stringHandler) expire(ctx context.Context, args []protocol.Value, kind 
 
 	if exp <= time.Now().UnixNano() {
 		_ = s.kv.Delete(ctx, storeKey)
+		Notify("g", "del", key)
 		return protocol.Value{Kind: protocol.KindInteger, I: 1}
 	}
 
@@ -157,6 +158,7 @@ func (s *stringHandler) expire(ctx context.Context, args []protocol.Value, kind 
 	if err := s.kv.Set(ctx, storeKey, datastruct.Encode(e.Type, exp, e.Payload)); err != nil {
 		return errValue(err)
 	}
+	Notify("g", "expire", key)
 	return protocol.Value{Kind: protocol.KindInteger, I: 1}
 }
 
@@ -185,6 +187,7 @@ func (s *stringHandler) persist(ctx context.Context, args []protocol.Value) prot
 	if serr := s.kv.Set(ctx, storeKey, datastruct.Encode(e.Type, 0, e.Payload)); serr != nil {
 		return errValue(serr)
 	}
+	Notify("g", "persist", key)
 	return protocol.Value{Kind: protocol.KindInteger, I: 1}
 }
 

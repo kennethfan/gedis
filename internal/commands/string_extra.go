@@ -55,6 +55,7 @@ func (s *stringHandler) append(ctx context.Context, args []protocol.Value) proto
 	if err := s.kv.Set(ctx, datastruct.StringKey(key), datastruct.EncodeString(out, expiry)); err != nil {
 		return errValue(err)
 	}
+	Notify("$", "append", key)
 	return protocol.Value{Kind: protocol.KindInteger, I: int64(len(out))}
 }
 
@@ -117,6 +118,7 @@ func (s *stringHandler) setrange(ctx context.Context, args []protocol.Value) pro
 	if err := s.kv.Set(ctx, datastruct.StringKey(key), datastruct.EncodeString(out, expiry)); err != nil {
 		return errValue(err)
 	}
+	Notify("$", "setrange", key)
 	return protocol.Value{Kind: protocol.KindInteger, I: newLen}
 }
 

@@ -228,6 +228,8 @@ func (s *stringHandler) move(ctx context.Context, args []protocol.Value) protoco
 		}
 		return errValue(err)
 	}
+	// TODO(真机对齐): 单库实现恒不移库；多库支持落地时在此成功分支补
+	// Notify("g","move_from",key)+Notify("g","move_to",dst)（事件表要求）。
 	return protocol.Value{Kind: protocol.KindInteger, I: 0}
 }
 

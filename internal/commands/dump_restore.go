@@ -112,6 +112,7 @@ func (h *dumpRestoreHandler) restore(ctx context.Context, args []protocol.Value)
 	if err := h.kv.Set(ctx, []byte(prefix+key), datastruct.Encode(e.Type, expiry, e.Payload)); err != nil {
 		return errValue(err)
 	}
+	Notify("g", "restore", key)
 	return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
 }
 

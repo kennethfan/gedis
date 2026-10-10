@@ -229,6 +229,7 @@ func (s *stringHandler) getdel(ctx context.Context, args []protocol.Value) proto
 		return errValue(err)
 	}
 	_ = s.kv.Delete(ctx, datastruct.StringKey(key))
+	Notify("g", "del", key)
 	return protocol.Value{Kind: protocol.KindBulkString, Bulk: e.Payload}
 }
 

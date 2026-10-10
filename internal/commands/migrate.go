@@ -127,6 +127,7 @@ func (h *migrateHandler) migrate(ctx context.Context, args []protocol.Value) pro
 		if err := h.kv.Delete(ctx, raw); err != nil {
 			return errValue(err)
 		}
+		Notify("g", "del", o.key)
 	}
 	return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
 }
