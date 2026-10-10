@@ -315,7 +315,7 @@ func (s *stringHandler) setnx(ctx context.Context, args []protocol.Value) protoc
 }
 
 func (s *stringHandler) touch(ctx context.Context, args []protocol.Value) protocol.Value {
-	if len(args) < 2 {
+	if len(args) < 1 {
 		return errValueStr("ERR wrong number of arguments for 'touch' command")
 	}
 	var n int64

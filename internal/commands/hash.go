@@ -189,7 +189,11 @@ func (h *hashHandler) hdel(ctx context.Context, args []protocol.Value) protocol.
 			expDirty = true
 		}
 	}
-	if err := h.writeHash(ctx, key, m, expiry); err != nil {
+	if len(m) == 0 && deleted > 0 {
+		if err := h.kv.Delete(ctx, datastruct.HashKey(key)); err != nil {
+			return errValue(err)
+		}
+	} else if err := h.writeHash(ctx, key, m, expiry); err != nil {
 		return errValue(err)
 	}
 	if expDirty {
@@ -199,6 +203,9 @@ func (h *hashHandler) hdel(ctx context.Context, args []protocol.Value) protocol.
 	}
 	if deleted > 0 {
 		Notify("h", "hdel", key)
+		if len(m) == 0 {
+			Notify("g", "del", key)
+		}
 	}
 	return protocol.Value{Kind: protocol.KindInteger, I: deleted}
 }

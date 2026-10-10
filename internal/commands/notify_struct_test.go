@@ -59,11 +59,11 @@ func TestHashListSetZSetEvents(t *testing.T) {
 	run("HMSET", "hm", "a", "1", "b", "2")
 	expectEvents(t, cliA, seq(wantEvent("hm", "hset")))
 
-	// HDEL 真删字段 → hdel；清空仍只 hdel（gedis 保留空 hash，无 del）；删不存在字段 → 零
+	// HDEL 真删字段 → hdel；删至空 key 移除 → hdel+del（官方表：结果 hash 空且 key 移除追加 del）；删不存在字段 → 零
 	run("HDEL", "h", "f2")
 	expectEvents(t, cliA, seq(wantEvent("h", "hdel")))
 	run("HDEL", "h", "f")
-	expectEvents(t, cliA, seq(wantEvent("h", "hdel")))
+	expectEvents(t, cliA, seq(wantEvent("h", "hdel"), wantEvent("h", "del")))
 	run("HDEL", "h", "nofield")
 	expectEvents(t, cliA, nil)
 
