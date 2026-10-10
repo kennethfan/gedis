@@ -327,6 +327,7 @@ func (h *zsetHandler) zadd(ctx context.Context, args []protocol.Value) protocol.
 	if werr := h.writeZSet(ctx, key, z, expiry); werr != nil {
 		return errValue(werr)
 	}
+	Notify("z", "zadd", key)
 	if fl.ch {
 		return protocol.Value{Kind: protocol.KindInteger, I: changed}
 	}
@@ -361,6 +362,12 @@ func (h *zsetHandler) zrem(ctx context.Context, args []protocol.Value) protocol.
 	}
 	if werr := h.writeZSet(ctx, key, z, expiry); werr != nil {
 		return errValue(werr)
+	}
+	if removed > 0 {
+		Notify("z", "zrem", key)
+		if len(z) == 0 {
+			Notify("g", "del", key)
+		}
 	}
 	return protocol.Value{Kind: protocol.KindInteger, I: removed}
 }
@@ -474,6 +481,7 @@ func (h *zsetHandler) zincrby(ctx context.Context, args []protocol.Value) protoc
 	if werr := h.writeZSet(ctx, key, z, expiry); werr != nil {
 		return errValue(werr)
 	}
+	Notify("z", "zincr", key)
 	return protocol.BulkOf(formatScore(ns))
 }
 

@@ -2,6 +2,8 @@
 package main
 
 import (
+	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -22,6 +24,7 @@ import (
 	"github.com/kennethfan/gedis/internal/replication"
 	"github.com/kennethfan/gedis/internal/sentinel"
 	"github.com/kennethfan/gedis/internal/storage"
+	"github.com/kennethfan/gedis/internal/tlsdial"
 )
 
 func main() {
@@ -38,6 +41,28 @@ func mustParseFsync(s string) storage.FsyncPolicy {
 		os.Exit(1)
 	}
 	return policy
+}
+
+// listenMain 建主服务监听：TLS 关闭时返回明文 listener；启用时加载证书
+// 并用 tls.NewListener 包装（同端口切换，该口只讲 TLS）。证书缺失 fail-fast。
+func listenMain(host string, port int, tlsCfg config.TLS) (net.Listener, error) {
+	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	if !tlsCfg.Enabled {
+		return ln, nil
+	}
+	cert, err := tls.LoadX509KeyPair(tlsCfg.CertFile, tlsCfg.KeyFile)
+	if err != nil {
+		_ = ln.Close()
+		return nil, fmt.Errorf("load tls cert: %w", err)
+	}
+	return tls.NewListener(ln, &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	}), nil
 }
 
 func loadClusterSnapshot(path string, topo *cluster.Topology) error {
@@ -60,6 +85,7 @@ func loadClusterSnapshot(path string, topo *cluster.Topology) error {
 
 func run() error {
 	configPath := flag.String("config", "gedis.toml", "TOML 配置文件路径")
+	loadRDB := flag.String("load-rdb", "", "启动时从真机 RDB 文件一次性导入（仅允许空库）")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)
@@ -87,6 +113,13 @@ func run() error {
 		return fmt.Errorf("open store: %w", err)
 	}
 	defer func() { _ = store.Close() }()
+	if *loadRDB != "" {
+		if err := loadRDBFile(context.Background(), store, *loadRDB); err != nil {
+			return fmt.Errorf("load rdb: %w", err)
+		}
+	}
+	store.SetEvictHook(commands.OnEvicted)
+	store.SetChangeHook(commands.InvalidateChange)
 
 	router := network.DefaultRouter()
 	srv := network.NewServer(router)
@@ -118,11 +151,14 @@ func run() error {
 	commands.RegisterWriteCommands(router)
 	txnReg := commands.RegisterTxn(router, hub)
 	pubsubReg := commands.RegisterPubSub(router)
+	commands.SetNotifyPublisher(pubsubReg.Publish)
+	commands.SetInvalidatePublisher(pubsubReg.Publish)
 	luaTimeout, err := cfg.Lua.EffectiveTimeLimit()
 	if err != nil {
 		return fmt.Errorf("invalid lua.time_limit: %w", err)
 	}
 	commands.RegisterLua(router, luaTimeout)
+	commands.RegisterFunctions(router, store, luaTimeout)
 	var clusterTopo *cluster.Topology
 	if cfg.Cluster.Enabled {
 		specs, err := cfg.Cluster.Specs()
@@ -162,6 +198,16 @@ func run() error {
 		}
 	}
 	authReg := commands.RegisterAuth(router, aclStore)
+	connReg := commands.RegisterConn(router, aclStore, authReg)
+	var shutdownFunc func()
+	commands.RegisterServer(router, store, stats, hub, connReg, commands.ServerDeps{
+		StartUnix: time.Now().Unix(),
+		Shutdown: func() {
+			if shutdownFunc != nil {
+				shutdownFunc()
+			}
+		},
+	})
 	var aclSaver commands.ACLSaver
 	if cfg.ACLFile != "" {
 		aclSaver = func() error { return acl.Save(cfg.ACLFile, aclStore) }
@@ -186,9 +232,10 @@ func run() error {
 		go sentinelReg.StartProbeLoop(sentinelStop)
 		sRouter := network.DefaultRouter()
 		sentinelPub := commands.RegisterPubSub(sRouter)
-		commands.RegisterSentinel(sRouter, sentinelReg, sentinelSelf, sentinelPub)
+		sentinelRunID := sentinel.NewRunID()
+		commands.RegisterSentinel(sRouter, sentinelReg, sentinelSelf, sentinelPub, sentinelRunID)
 		sentinelReg.Peers.SeedPeers(cfg.Sentinel.Sentinels)
-		runSentinelLoops(sentinelReg, sentinelSelf, sentinel.NewRunID(),
+		runSentinelLoops(sentinelReg, sentinelSelf, sentinelRunID,
 			time.Duration(cfg.Sentinel.DownAfterMs)*time.Millisecond,
 			time.Duration(cfg.Sentinel.FailoverTimeoutMs)*time.Millisecond,
 			sentinelPub, sentinelStop)
@@ -214,17 +261,23 @@ func run() error {
 		pubsubReg.ConnClosed(c)
 		askingReg.ConnClosed(c)
 		authReg.ConnClosed(c)
+		connReg.ConnClosed(c)
 	})
 	exp := commands.NewExpirer(store, stats)
 	exp.Start()
+	shutdownFunc = func() {
+		exp.Stop()
+		_ = srv.Close()
+	}
 	defer exp.Stop() // 早退路径（监听失败等）先停清扫再关存储，防 SweepOnce 扫已关 DB panic
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
-	ln, err := net.Listen("tcp", addr)
+	tlsdial.Configure(tlsdial.Settings{Enabled: cfg.TLS.Enabled, InsecureSkipVerify: cfg.TLS.InsecureSkipVerify})
+	ln, err := listenMain(cfg.Server.Host, cfg.Server.Port, cfg.TLS)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
 	}
-	slog.Info("gedis listening", "addr", ln.Addr())
+	slog.Info("gedis listening", "addr", ln.Addr(), "tls", cfg.TLS.Enabled)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

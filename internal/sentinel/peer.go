@@ -3,12 +3,12 @@ package sentinel
 import (
 	"bufio"
 	"fmt"
-	"net"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/kennethfan/gedis/internal/protocol"
+	"github.com/kennethfan/gedis/internal/tlsdial"
 )
 
 // peerTimeout 是哨兵间点对点 RESP 请求的单次超时。
@@ -16,7 +16,7 @@ const peerTimeout = 2 * time.Second
 
 // sendCmd 直连 addr 发一条命令并解码首个 RESP 回包。
 func sendCmd(addr string, args ...string) (protocol.Value, error) {
-	conn, err := net.DialTimeout("tcp", addr, peerTimeout)
+	conn, err := tlsdial.DialTimeout("tcp", addr, peerTimeout)
 	if err != nil {
 		return protocol.Value{}, err
 	}
@@ -73,7 +73,7 @@ func FetchRole(addr string) (string, error) {
 // FetchHello 向对端订阅 __sentinel__:hello，取首条本频道消息解析。
 // timeout 内无消息返回超时错。
 func FetchHello(peerAddr string, timeout time.Duration) (Hello, error) {
-	conn, err := net.DialTimeout("tcp", peerAddr, timeout)
+	conn, err := tlsdial.DialTimeout("tcp", peerAddr, timeout)
 	if err != nil {
 		return Hello{}, err
 	}

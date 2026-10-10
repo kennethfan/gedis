@@ -18,6 +18,7 @@ var genericMeta = []acl.Meta{
 	{Name: "RENAME", Category: "keyspace", Keys: acl.KeySpec{First: 0, Last: 1}},
 	{Name: "RENAMENX", Category: "keyspace", Keys: acl.KeySpec{First: 0, Last: 1}},
 	{Name: "SORT", Category: "keyspace", Keys: acl.KeySpec{Custom: acl.SortStoreKey}},
+	{Name: "SORT_RO", Category: "keyspace", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
 }
 
 func RegisterGeneric(r *network.Router, kv KV) {
@@ -29,6 +30,7 @@ func RegisterGeneric(r *network.Router, kv KV) {
 	r.Register("RENAME", h.renamePlain)
 	r.Register("RENAMENX", h.renamenx)
 	r.Register("SORT", h.sort)
+	r.Register("SORT_RO", h.sortRO)
 }
 
 type genericHandler struct {
@@ -174,6 +176,7 @@ func (h *genericHandler) copy(ctx context.Context, args []protocol.Value) protoc
 			return errValue(err)
 		}
 	}
+	Notify("g", "copy_to", dst)
 	return protocol.Value{Kind: protocol.KindInteger, I: 1}
 }
 
@@ -243,6 +246,8 @@ func (h *genericHandler) rename(ctx context.Context, args []protocol.Value, nx b
 			return errValue(err)
 		}
 	}
+	Notify("g", "rename_from", src)
+	Notify("g", "rename_to", dst)
 	if nx {
 		return protocol.Value{Kind: protocol.KindInteger, I: 1}
 	}
@@ -385,6 +390,17 @@ type sortItem struct {
 	str   string
 }
 
+func (h *genericHandler) sortRO(ctx context.Context, args []protocol.Value) protocol.Value {
+	o, errReply := parseSortOptions(args)
+	if errReply != nil {
+		return *errReply
+	}
+	if o.storeOn {
+		return errValueStr("ERR syntax error")
+	}
+	return h.sort(ctx, args)
+}
+
 func (h *genericHandler) sort(ctx context.Context, args []protocol.Value) protocol.Value {
 	if len(args) < 1 {
 		return errValueStr("ERR wrong number of arguments for 'sort' command")
@@ -523,13 +539,19 @@ func (h *genericHandler) sort(ctx context.Context, args []protocol.Value) protoc
 				out = append(out, string(v.Bulk))
 			}
 		}
+		oldExisted := false
 		if draw, de, derr := lookupRaw(ctx, h.kv, o.store); derr == nil {
 			h.deleteByRaw(ctx, draw, de, o.store)
+			oldExisted = true
 		} else if !isNotFound(derr) {
 			return errValue(derr)
 		}
 		if werr := h.lists().writeList(ctx, o.store, out, 0); werr != nil {
 			return errValue(werr)
+		}
+		Notify("g", "sortstore", o.store)
+		if len(out) == 0 && oldExisted {
+			Notify("g", "del", o.store)
 		}
 		return protocol.Value{Kind: protocol.KindInteger, I: int64(len(out))}
 	}

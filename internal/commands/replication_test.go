@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kennethfan/gedis/internal/network"
 	"github.com/kennethfan/gedis/internal/protocol"
@@ -64,6 +65,78 @@ func Test_Repl_when_ReplicaofNoOne(t *testing.T) {
 	require.Equal(t, protocol.KindError, got.Kind)
 }
 
+// Given: 主库模式
+// When: REPLCONF 各子命令
+// Then: listening-port/capa 回 +OK；未知子命令与坏参数报错；ACK 需连接上下文
+func Test_Repl_when_Replconf(t *testing.T) {
+	r, _, _, _ := openReplSetup(t)
+	ok := protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
+	require.Equal(t, ok, dispatch(r, "REPLCONF", "listening-port", "6380"))
+	require.Equal(t, protocol.KindError, dispatch(r, "REPLCONF", "listening-port", "nope").Kind)
+	require.Equal(t, ok, dispatch(r, "REPLCONF", "capa", "psync2"))
+	require.Equal(t, ok, dispatch(r, "REPLCONF", "capa", "eof"))
+	require.Equal(t, protocol.KindError, dispatch(r, "REPLCONF", "bogus-cmd").Kind)
+	require.Equal(t, protocol.KindError, dispatch(r, "REPLCONF").Kind)
+	require.Equal(t, protocol.KindError, dispatch(r, "REPLCONF", "ACK").Kind)
+	// 真机措辞对齐（redis 7.2.6 实测）：未知子命令与坏参数面一律 ERR syntax error；
+	// capa 接受多个；GETACK 必须带 '*'，裸 GETACK 为 syntax error。
+	require.Equal(t, "ERR syntax error", dispatch(r, "REPLCONF", "bogus-cmd").S)
+	require.Equal(t, "ERR syntax error", dispatch(r, "REPLCONF", "ACK").S)
+	require.Equal(t, "ERR syntax error", dispatch(r, "REPLCONF", "capa").S)
+	require.Equal(t, "ERR syntax error", dispatch(r, "REPLCONF", "listening-port").S)
+	require.Equal(t, ok, dispatch(r, "REPLCONF", "capa", "eof", "capa", "psync2"))
+	require.Equal(t, "ERR syntax error", dispatch(r, "REPLCONF", "GETACK").S)
+	got := dispatch(r, "REPLCONF", "GETACK", "*")
+	require.Equal(t, protocol.KindArray, got.Kind)
+	require.Len(t, got.Elems, 3)
+	require.Equal(t, "REPLCONF", string(got.Elems[0].Bulk))
+	require.Equal(t, "ACK", string(got.Elems[1].Bulk))
+	// ACK 无连接上下文必须报错（无法归属副本）
+	require.Equal(t, protocol.KindError, dispatch(r, "REPLCONF", "ACK", "5").Kind)
+
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	ctx := network.ContextWithConn(context.Background(), server)
+	require.Equal(t, ok, r.Dispatch(ctx, cmd("REPLCONF", "ACK", "5")))
+	require.Equal(t, protocol.KindError, r.Dispatch(ctx, cmd("REPLCONF", "ACK", "nope")).Kind)
+}
+
+// Given: 主库模式
+// When: SYNC / SLAVEOF / FAILOVER / WAIT 参数面
+// Then: SYNC 指路 PSYNC；SLAVEOF NO ONE 回 OK；无副本 FAILOVER 报错；WAIT 零副本回 0
+func Test_Repl_when_SyncSlaveofFailoverWait(t *testing.T) {
+	r, _, _, _ := openReplSetup(t)
+	ok := protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
+
+	got := dispatch(r, "SYNC")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "PSYNC")
+
+	require.Equal(t, ok, dispatch(r, "SLAVEOF", "NO", "ONE"))
+	got = dispatch(r, "SLAVEOF", "host", "notaport")
+	require.Equal(t, protocol.KindError, got.Kind)
+
+	got = dispatch(r, "FAILOVER")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "replica")
+	require.Equal(t, "ERR FAILOVER requires connected replicas.", got.S)
+
+	got = dispatch(r, "WAIT", "0", "100")
+	require.Equal(t, protocol.KindInteger, got.Kind)
+	require.Equal(t, int64(0), got.I)
+
+	start := time.Now()
+	got = dispatch(r, "WAIT", "1", "50")
+	require.Equal(t, protocol.KindInteger, got.Kind)
+	require.Equal(t, int64(0), got.I)
+	require.GreaterOrEqual(t, time.Since(start), 50*time.Millisecond)
+
+	require.Equal(t, protocol.KindError, dispatch(r, "WAIT", "1").Kind)
+	require.Equal(t, protocol.KindError, dispatch(r, "WAIT", "x", "y").Kind)
+	require.Equal(t, protocol.KindError, dispatch(r, "WAIT", "-1", "10").Kind)
+}
+// Given: 主库模式
 // When: SET / GET
 // Then: SET 报 READONLY，GET 正常；关闭只读后 SET 恢复
 func Test_Repl_when_ReadOnly(t *testing.T) {

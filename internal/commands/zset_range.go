@@ -538,6 +538,10 @@ func (h *zsetHandler) zremrangebyrank(ctx context.Context, args []protocol.Value
 	if werr := h.writeZSet(ctx, key, z, expiry); werr != nil {
 		return errValue(werr)
 	}
+	Notify("z", "zrembyrank", key)
+	if len(z) == 0 {
+		Notify("g", "del", key)
+	}
 	return protocol.Value{Kind: protocol.KindInteger, I: hi - lo + 1}
 }
 
@@ -575,6 +579,12 @@ func (h *zsetHandler) zremrangebyscore(ctx context.Context, args []protocol.Valu
 	}
 	if werr := h.writeZSet(ctx, key, z, expiry); werr != nil {
 		return errValue(werr)
+	}
+	if n > 0 {
+		Notify("z", "zrembyscore", key)
+		if len(z) == 0 {
+			Notify("g", "del", key)
+		}
 	}
 	return protocol.Value{Kind: protocol.KindInteger, I: n}
 }

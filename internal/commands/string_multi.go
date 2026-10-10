@@ -48,6 +48,10 @@ func (s *stringHandler) mset(ctx context.Context, args []protocol.Value) protoco
 	if err := s.kv.WriteBatch(ctx, ops); err != nil {
 		return errValue(err)
 	}
+	for i := 0; i < len(args); i += 2 {
+		key, _ := argString(args[i])
+		Notify("$", "set", key)
+	}
 	return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
 }
 

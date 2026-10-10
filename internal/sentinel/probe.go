@@ -2,9 +2,10 @@ package sentinel
 
 import (
 	"bufio"
-	"net"
 	"strings"
 	"time"
+
+	"github.com/kennethfan/gedis/internal/tlsdial"
 )
 
 // ProbeOnce 对全部被监控地址做一次 DialTimeout+PING 探活并经 RecordProbe
@@ -59,7 +60,7 @@ func (r *Registry) StartProbeLoop(stop <-chan struct{}) {
 }
 
 func pingOK(addr string, timeout time.Duration) bool {
-	conn, err := net.DialTimeout("tcp", addr, timeout)
+	conn, err := tlsdial.DialTimeout("tcp", addr, timeout)
 	if err != nil {
 		return false
 	}

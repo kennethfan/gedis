@@ -58,6 +58,7 @@ func (e *Expirer) SweepOnce() (int, error) {
 		}
 		n++
 		e.stats.IncExpired()
+		Notify("x", "expired", userKeyFromRaw(string(k)))
 	}
 	return n, nil
 }

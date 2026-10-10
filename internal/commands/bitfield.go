@@ -14,6 +14,7 @@ import (
 
 var bitfieldMeta = []acl.Meta{
 	{Name: "BITFIELD", Category: "bitmap", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "BITFIELD_RO", Category: "bitmap", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
 }
 
 func (h *bitmapHandler) registerField(r *network.Router) {
@@ -21,6 +22,7 @@ func (h *bitmapHandler) registerField(r *network.Router) {
 		acl.RegisterMeta(m)
 	}
 	r.Register("BITFIELD", h.bitfield)
+	r.Register("BITFIELD_RO", h.bitfieldRO)
 }
 
 type bitfieldType struct {
@@ -171,6 +173,31 @@ func bitfieldIncrby(buf []byte, off uint64, t bitfieldType, incr int64, ov bitOv
 	res := bitfieldSignExtend(raw&bitfieldMask(t.bits), t)
 	_, out := bitfieldSet(buf, off, t, res)
 	return res, out, false
+}
+
+func (h *bitmapHandler) bitfieldRO(ctx context.Context, args []protocol.Value) protocol.Value {
+	for i := 1; i < len(args); {
+		name, ok := argString(args[i])
+		if !ok {
+			break
+		}
+		var step int
+		switch strings.ToUpper(name) {
+		case "GET":
+			step = 3
+		case "SET", "INCRBY":
+			return errValueStr("ERR BITFIELD_RO only supports the GET subcommand")
+		case "OVERFLOW":
+			step = 2
+		default:
+			return h.bitfield(ctx, args)
+		}
+		if i+step-1 >= len(args) {
+			break
+		}
+		i += step
+	}
+	return h.bitfield(ctx, args)
 }
 
 func (h *bitmapHandler) bitfield(ctx context.Context, args []protocol.Value) protocol.Value {

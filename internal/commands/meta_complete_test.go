@@ -21,6 +21,7 @@ func wireMainRouter(t *testing.T) *network.Router {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
+	store.SetEvictHook(NotifyEvicted)
 	stats := network.NewStats()
 	hub := replication.NewHub(1024)
 	r := network.DefaultRouter()
@@ -39,11 +40,16 @@ func wireMainRouter(t *testing.T) *network.Router {
 	RegisterReplication(r, store, stats, hub)
 	RegisterWriteCommands(r)
 	RegisterTxn(r, hub)
-	RegisterPubSub(r)
+	pubsubReg := RegisterPubSub(r)
+	SetNotifyPublisher(pubsubReg.Publish)
+	t.Cleanup(func() { SetNotifyPublisher(nil) })
 	RegisterLua(r, 5*time.Second)
+	RegisterFunctions(r, store, 5*time.Second)
 	RegisterCluster(r, store, cluster.NewTopology(false, nil), NewAskRegistry())
 	st := acl.NewStore()
 	reg := RegisterAuth(r, st)
+	connReg := RegisterConn(r, st, reg)
+	RegisterServer(r, store, stats, hub, connReg, ServerDeps{})
 	RegisterACL(r, st, reg, nil)
 	return r
 }
@@ -52,7 +58,7 @@ func TestMetaComplete(t *testing.T) {
 	r := wireMainRouter(t)
 	sRouter := network.DefaultRouter()
 	RegisterPubSub(sRouter)
-	RegisterSentinel(sRouter, sentinel.NewRegistry(nil, time.Second), "127.0.0.1:0", RegisterPubSub(sRouter))
+	RegisterSentinel(sRouter, sentinel.NewRegistry(nil, time.Second), "127.0.0.1:0", RegisterPubSub(sRouter), "metatest-runid")
 
 	var missing []string
 	seen := map[string]bool{}

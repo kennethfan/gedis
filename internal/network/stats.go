@@ -238,3 +238,15 @@ func (s *Stats) SlowReset() {
 	defer s.mu.Unlock()
 	s.slow = nil
 }
+
+// Reset 清零累计计数与慢日志（CONFIG RESETSTAT 用；连接数 gauge 不动）。
+func (s *Stats) Reset() {
+	if s == nil {
+		return
+	}
+	s.commandsProcessed.Store(0)
+	s.expiredKeys.Store(0)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.slow = nil
+}

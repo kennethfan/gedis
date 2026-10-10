@@ -127,6 +127,8 @@ func Test_Lua_when_ErrOkTables(t *testing.T) {
 		dispatchLua(r, c, "EVAL", "return redis.status_reply('fine')", "0"))
 	require.Equal(t, protocol.Value{Kind: protocol.KindError, S: "ERR bad"},
 		dispatchLua(r, c, "EVAL", "return redis.error_reply('bad')", "0"))
+	require.Equal(t, protocol.Value{Kind: protocol.KindError, S: "foo bar"},
+		dispatchLua(r, c, "EVAL", "return redis.error_reply('foo bar')", "0"))
 	require.Equal(t, protocol.BulkOf("a9993e364706816aba3e25717850c26c9cd0d89d"),
 		dispatchLua(r, c, "EVAL", "return redis.sha1hex('abc')", "0"))
 }

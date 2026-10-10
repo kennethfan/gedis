@@ -93,6 +93,11 @@ func (h *listHandler) push(ctx context.Context, args []protocol.Value, head bool
 	if err := h.writeList(ctx, key, elems, expiry); err != nil {
 		return errValue(err)
 	}
+	if head {
+		Notify("l", "lpush", key)
+	} else {
+		Notify("l", "rpush", key)
+	}
 	return protocol.Value{Kind: protocol.KindInteger, I: int64(len(elems))}
 }
 
@@ -149,12 +154,20 @@ func (h *listHandler) popOne(ctx context.Context, args []protocol.Value, tail bo
 		out = elems[:count]
 		elems = elems[count:]
 	}
+	event := "lpop"
+	if tail {
+		event = "rpop"
+	}
 	if len(elems) == 0 {
 		if err := h.kv.Delete(ctx, datastruct.ListKey(key)); err != nil {
 			return errValue(err)
 		}
+		Notify("l", event, key)
+		Notify("g", "del", key)
 	} else if err := h.writeList(ctx, key, elems, expiry); err != nil {
 		return errValue(err)
+	} else {
+		Notify("l", event, key)
 	}
 	if !withCount {
 		if len(out) == 0 {

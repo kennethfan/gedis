@@ -18,6 +18,7 @@ var zsetStoreMeta = []acl.Meta{
 	{Name: "ZUNIONSTORE", Category: "sortedset", Keys: acl.KeySpec{Custom: acl.ZStoreKeys}},
 	{Name: "ZINTERSTORE", Category: "sortedset", Keys: acl.KeySpec{Custom: acl.ZStoreKeys}},
 	{Name: "ZDIFFSTORE", Category: "sortedset", Keys: acl.KeySpec{Custom: acl.ZStoreKeys}},
+	{Name: "ZINTERCARD", Category: "sortedset", ReadOnly: true, Keys: acl.KeySpec{Custom: acl.NumkeysKeys(0, 1)}},
 }
 
 func (h *zsetHandler) registerStore(r *network.Router) {
@@ -30,6 +31,7 @@ func (h *zsetHandler) registerStore(r *network.Router) {
 	r.Register("ZUNIONSTORE", h.zunionstore)
 	r.Register("ZINTERSTORE", h.zinterstore)
 	r.Register("ZDIFFSTORE", h.zdiffstore)
+	r.Register("ZINTERCARD", h.zintercard)
 }
 
 type zsetAggregate int
@@ -306,10 +308,13 @@ func (h *zsetHandler) storeZSetOp(ctx context.Context, args []protocol.Value, na
 	if errReply != nil {
 		return *errReply
 	}
+	oldExisted := false
 	if _, _, err := h.readZSet(ctx, dst); err != nil {
 		if !isNotFound(err) {
 			return errValue(err)
 		}
+	} else {
+		oldExisted = true
 	}
 	sets, errReply := h.readZSets(ctx, spec.keys)
 	if errReply != nil {
@@ -328,6 +333,10 @@ func (h *zsetHandler) storeZSetOp(ctx context.Context, args []protocol.Value, na
 	if err := h.kv.WriteBatch(ctx, ops); err != nil {
 		return errValue(err)
 	}
+	Notify("z", name, dst)
+	if len(res) == 0 && oldExisted {
+		Notify("g", "del", dst)
+	}
 	return protocol.Value{Kind: protocol.KindInteger, I: int64(len(res))}
 }
 
@@ -343,4 +352,79 @@ func (h *zsetHandler) zdiffstore(ctx context.Context, args []protocol.Value) pro
 	return h.storeZSetOp(ctx, args, "zdiffstore", func(sets []map[string]float64, _ []float64, _ zsetAggregate) map[string]float64 {
 		return diffZSets(sets)
 	}, false)
+}
+
+// zintercard 实现 ZINTERCARD numkeys key [key ...] [LIMIT n]：只计数不存，
+// 缺 key 视为空集；LIMIT 提前终止计数。
+func (h *zsetHandler) zintercard(ctx context.Context, args []protocol.Value) protocol.Value {
+	const name = "zintercard"
+	if len(args) < 1 {
+		return errValueStr("ERR wrong number of arguments for '" + name + "' command")
+	}
+	numStr, ok := argString(args[0])
+	if !ok {
+		return errValueStr("ERR invalid numkeys")
+	}
+	num, ok := parseCount(numStr)
+	if !ok || num < 1 {
+		return errValueStr("ERR at least 1 input key is needed for '" + name + "' command")
+	}
+	if int64(len(args)) < 1+num {
+		return errValueStr("ERR wrong number of arguments for '" + name + "' command")
+	}
+	keys := make([]string, 0, num)
+	for _, a := range args[1 : 1+num] {
+		k, ok := argString(a)
+		if !ok {
+			return errValueStr("ERR invalid key")
+		}
+		keys = append(keys, k)
+	}
+	var limit int64
+	limited := false
+	if rest := args[1+num:]; len(rest) > 0 {
+		if len(rest) != 2 {
+			return errValueStr("ERR syntax error")
+		}
+		where, ok := argString(rest[0])
+		if !ok || !strings.EqualFold(where, "LIMIT") {
+			return errValueStr("ERR syntax error")
+		}
+		lstr, ok := argString(rest[1])
+		if !ok {
+			return errValueStr("ERR value is not an integer or out of range")
+		}
+		limit, ok = parseCount(lstr)
+		if !ok || limit < 0 {
+			return errValueStr("ERR value is not an integer or out of range")
+		}
+		limited = true
+	}
+	sets, errReply := h.readZSets(ctx, keys)
+	if errReply != nil {
+		return *errReply
+	}
+	if limited && limit == 0 {
+		return protocol.Value{Kind: protocol.KindInteger}
+	}
+	smallest := sets[0]
+	for _, z := range sets[1:] {
+		if len(z) < len(smallest) {
+			smallest = z
+		}
+	}
+	var n int64
+members:
+	for m := range smallest {
+		for _, z := range sets {
+			if _, ok := z[m]; !ok {
+				continue members
+			}
+		}
+		n++
+		if limited && n >= limit {
+			break
+		}
+	}
+	return protocol.Value{Kind: protocol.KindInteger, I: n}
 }

@@ -238,3 +238,352 @@ func Test_PubSub_when_ResubscribeAfterFullUnsub(t *testing.T) {
 		protocol.BulkOf("message"), protocol.BulkOf("c1"), protocol.BulkOf("v"),
 	), readPushed(t, cliA))
 }
+
+func emptyArray() protocol.Value {
+	return protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{}}
+}
+
+// newPubSubConn 额外开一根 pipe 作非订阅查询连接（订阅态连接发 PUBSUB 会被拦截）。
+func newPubSubConn(t testing.TB) net.Conn {
+	t.Helper()
+	srv, cli := net.Pipe()
+	t.Cleanup(func() { srv.Close(); cli.Close() })
+	return srv
+}
+
+// WM: CHANNELS 空表回 *0；有订阅时列全部普通频道（字典序，真机为 dict 序——
+// 顺序分歧已在 ledger 记录），pattern 订阅名不出现，跨连接去重
+func Test_PubSub_when_PubsubChannels(t *testing.T) {
+	r, _, srvA, _, srvB, _ := openPubSubSetup(t)
+	q := newPubSubConn(t)
+	require.Equal(t, emptyArray(), dispatchPub(r, q, "PUBSUB", "CHANNELS"))
+	dispatchPub(r, srvA, "SUBSCRIBE", "c2")
+	dispatchPub(r, srvB, "SUBSCRIBE", "c1")
+	dispatchPub(r, srvB, "PSUBSCRIBE", "p*")
+	require.Equal(t, protocol.ArrayOf(protocol.BulkOf("c1"), protocol.BulkOf("c2")),
+		dispatchPub(r, q, "PUBSUB", "CHANNELS"))
+}
+
+// WM: CHANNELS 带 glob pattern 过滤（stringmatchlen 语义）
+func Test_PubSub_when_PubsubChannelsPattern(t *testing.T) {
+	r, _, srvA, _, _, _ := openPubSubSetup(t)
+	q := newPubSubConn(t)
+	dispatchPub(r, srvA, "SUBSCRIBE", "alpha")
+	dispatchPub(r, srvA, "SUBSCRIBE", "beta")
+	dispatchPub(r, srvA, "SUBSCRIBE", "zeta")
+	require.Equal(t, protocol.ArrayOf(protocol.BulkOf("alpha")),
+		dispatchPub(r, q, "PUBSUB", "CHANNELS", "a*"))
+	require.Equal(t, emptyArray(), dispatchPub(r, q, "PUBSUB", "CHANNELS", "zzz*"))
+}
+
+// WM: NUMSUB 扁平 [ch,n,...]；未订阅回 0；pattern 订阅不计；无参回 *0
+func Test_PubSub_when_PubsubNumsub(t *testing.T) {
+	r, _, srvA, _, srvB, _ := openPubSubSetup(t)
+	q := newPubSubConn(t)
+	require.Equal(t, emptyArray(), dispatchPub(r, q, "PUBSUB", "NUMSUB"))
+	dispatchPub(r, srvA, "SUBSCRIBE", "c1")
+	dispatchPub(r, srvB, "PSUBSCRIBE", "c1")
+	require.Equal(t, protocol.ArrayOf(
+		protocol.BulkOf("c1"), protocol.Value{Kind: protocol.KindInteger, I: 1},
+		protocol.BulkOf("nope"), protocol.Value{Kind: protocol.KindInteger, I: 0},
+	), dispatchPub(r, q, "PUBSUB", "NUMSUB", "c1", "nope"))
+}
+
+// WM: NUMPAT 是全局计数（所有连接 patterns 之和），退订递减
+func Test_PubSub_when_PubsubNumpat(t *testing.T) {
+	r, _, srvA, _, srvB, _ := openPubSubSetup(t)
+	q := newPubSubConn(t)
+	require.Equal(t, int64(0), dispatchPub(r, q, "PUBSUB", "NUMPAT").I)
+	dispatchPub(r, srvA, "PSUBSCRIBE", "a*")
+	dispatchPub(r, srvB, "PSUBSCRIBE", "b*")
+	require.Equal(t, int64(2), dispatchPub(r, q, "PUBSUB", "NUMPAT").I)
+	dispatchPub(r, srvA, "PUNSUBSCRIBE", "a*")
+	require.Equal(t, int64(1), dispatchPub(r, q, "PUBSUB", "NUMPAT").I)
+}
+
+// WM: 裸 PUBSUB → 容器 arity 错；NUMPAT/HELP 多参 → 'pubsub|<sub>' arity 错（与 7.2.6 逐字节一致）
+func Test_PubSub_when_PubsubArityErrors(t *testing.T) {
+	r, _, srvA, _, _, _ := openPubSubSetup(t)
+	require.Equal(t, "ERR wrong number of arguments for 'pubsub' command",
+		dispatchPub(r, srvA, "PUBSUB").S)
+	require.Equal(t, "ERR wrong number of arguments for 'pubsub|numpat' command",
+		dispatchPub(r, srvA, "PUBSUB", "NUMPAT", "x").S)
+	require.Equal(t, "ERR wrong number of arguments for 'pubsub|help' command",
+		dispatchPub(r, srvA, "PUBSUB", "HELP", "x").S)
+	require.Equal(t, "ERR wrong number of arguments for 'pubsub|numpat' command",
+		dispatchPub(r, srvA, "PUBSUB", "numpat", "x").S)
+}
+
+// WM: 未知子命令 → Try PUBSUB HELP（原文子命令保大小写）
+func Test_PubSub_when_PubsubUnknownSub(t *testing.T) {
+	r, _, srvA, _, _, _ := openPubSubSetup(t)
+	require.Equal(t, "ERR unknown subcommand 'foo'. Try PUBSUB HELP.",
+		dispatchPub(r, srvA, "PUBSUB", "foo").S)
+	require.Equal(t, "ERR unknown subcommand 'Foo'. Try PUBSUB HELP.",
+		dispatchPub(r, srvA, "PUBSUB", "Foo").S)
+}
+
+// WM: CHANNELS 多于 1 个 pattern → unknown subcommand or wrong number of arguments（原文大小写）
+func Test_PubSub_when_PubsubChannelsTooManyArgs(t *testing.T) {
+	r, _, srvA, _, _, _ := openPubSubSetup(t)
+	require.Equal(t, "ERR unknown subcommand or wrong number of arguments for 'CHANNELS'. Try PUBSUB HELP.",
+		dispatchPub(r, srvA, "PUBSUB", "CHANNELS", "a", "b").S)
+	require.Equal(t, "ERR unknown subcommand or wrong number of arguments for 'channels'. Try PUBSUB HELP.",
+		dispatchPub(r, srvA, "PUBSUB", "channels", "a", "b").S)
+}
+
+// WM: PUBSUB HELP → 14 元素 simple-string 数组（首行与真机 7.2.6 逐字节一致）
+func Test_PubSub_when_PubsubHelp(t *testing.T) {
+	r, _, srvA, _, _, _ := openPubSubSetup(t)
+	got := dispatchPub(r, srvA, "PUBSUB", "HELP")
+	require.Equal(t, protocol.KindArray, got.Kind)
+	require.Len(t, got.Elems, 14)
+	require.Equal(t, protocol.KindSimpleString, got.Elems[0].Kind)
+	require.Equal(t, "PUBSUB <subcommand> [<arg> [value] [opt] ...]. Subcommands are:", got.Elems[0].S)
+	require.Equal(t, "HELP", got.Elems[12].S)
+	require.Equal(t, "    Print this help.", got.Elems[13].S)
+}
+
+// WM: 订阅态下 PUBSUB 合法子命令报 'pubsub|<sub>' 拦截错；裸 PUBSUB / 未知子命令 /
+// 子命令 arity 错优先于拦截（真机 7.2.6：arity 与 unknown-sub 先于 submode 检查）
+func Test_PubSub_when_PubsubSubMode(t *testing.T) {
+	r, _, srvA, _, _, _ := openPubSubSetup(t)
+	dispatchPub(r, srvA, "SUBSCRIBE", "c1")
+	require.Equal(t,
+		"ERR Can't execute 'pubsub|numpat': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context",
+		dispatchPub(r, srvA, "PUBSUB", "NUMPAT").S)
+	require.Equal(t,
+		"ERR Can't execute 'pubsub|channels': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context",
+		dispatchPub(r, srvA, "PUBSUB", "CHANNELS").S)
+	require.Equal(t,
+		"ERR Can't execute 'pubsub|numsub': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context",
+		dispatchPub(r, srvA, "PUBSUB", "NUMSUB").S)
+	require.Equal(t, "ERR wrong number of arguments for 'pubsub' command",
+		dispatchPub(r, srvA, "PUBSUB").S)
+	require.Equal(t, "ERR unknown subcommand 'foo'. Try PUBSUB HELP.",
+		dispatchPub(r, srvA, "PUBSUB", "foo").S)
+	require.Equal(t, "ERR wrong number of arguments for 'pubsub|numpat' command",
+		dispatchPub(r, srvA, "PUBSUB", "NUMPAT", "x").S)
+}
+
+// WM: 计数分域——ssubscribe 计数只看 shard；subscribe/psubscribe 只看 subs+patterns
+// （真机 count_probe：SSUBSCRIBE a→1, SUBSCRIBE b→1, SSUBSCRIBE c→2, PSUBSCRIBE p*→2）
+func Test_PubSub_when_SsubscribeConfirmCountsByDomain(t *testing.T) {
+	r, _, srvA, _, _, _ := openPubSubSetup(t)
+	require.Equal(t, confirmKind("a", 1, "ssubscribe"), dispatchPub(r, srvA, "SSUBSCRIBE", "a"))
+	require.Equal(t, confirmKind("b", 1, "subscribe"), dispatchPub(r, srvA, "SUBSCRIBE", "b"))
+	require.Equal(t, confirmKind("c", 2, "ssubscribe"), dispatchPub(r, srvA, "SSUBSCRIBE", "c"))
+	require.Equal(t, confirmKind("p*", 2, "psubscribe"), dispatchPub(r, srvA, "PSUBSCRIBE", "p*"))
+	require.Equal(t, confirmKind("a", 2, "ssubscribe"), dispatchPub(r, srvA, "SSUBSCRIBE", "a"))
+}
+
+// WM: 多频道 SSUBSCRIBE → 逐参确认（前 n-1 推送、末个返回），shard 域计数
+func Test_PubSub_when_SsubscribeMultiArg(t *testing.T) {
+	r, _, srvA, cliA, _, _ := openPubSubSetup(t)
+	type result struct{ v protocol.Value }
+	ch := make(chan result, 1)
+	go func() { ch <- result{dispatchPub(r, srvA, "SSUBSCRIBE", "s1", "s2")} }()
+	require.Equal(t, confirmKind("s1", 1, "ssubscribe"), readPushed(t, cliA))
+	require.Equal(t, confirmKind("s2", 2, "ssubscribe"), (<-ch).v)
+}
+
+// WM: SUNSUBSCRIBE 零 shard 无参 → [sunsubscribe nil 0]；显式未订阅频道 → [sunsubscribe zz 0]
+func Test_PubSub_when_SunsubscribeFresh(t *testing.T) {
+	r, _, srvA, _, _, _ := openPubSubSetup(t)
+	require.Equal(t, protocol.ArrayOf(
+		protocol.BulkOf("sunsubscribe"),
+		protocol.Value{Kind: protocol.KindBulkString},
+		protocol.Value{Kind: protocol.KindInteger, I: 0},
+	), dispatchPub(r, srvA, "SUNSUBSCRIBE"))
+	require.Equal(t, confirmKind("zz", 0, "sunsubscribe"),
+		dispatchPub(r, srvA, "SUNSUBSCRIBE", "zz"))
+}
+
+// WM: 裸 SUNSUBSCRIBE → 逆序逐个退 shard（计数 = shard 域，与普通 UNSUBSCRIBE 同形）
+func Test_PubSub_when_SunsubscribeAllReversed(t *testing.T) {
+	r, _, srvA, cliA, _, _ := openPubSubSetup(t)
+	type result struct{ v protocol.Value }
+	sub := make(chan result, 1)
+	go func() { sub <- result{dispatchPub(r, srvA, "SSUBSCRIBE", "s1", "s2", "s3")} }()
+	require.Equal(t, confirmKind("s1", 1, "ssubscribe"), readPushed(t, cliA))
+	require.Equal(t, confirmKind("s2", 2, "ssubscribe"), readPushed(t, cliA))
+	require.Equal(t, confirmKind("s3", 3, "ssubscribe"), (<-sub).v)
+	unsub := make(chan result, 1)
+	go func() { unsub <- result{dispatchPub(r, srvA, "SUNSUBSCRIBE")} }()
+	require.Equal(t, confirmKind("s3", 2, "sunsubscribe"), readPushed(t, cliA))
+	require.Equal(t, confirmKind("s2", 1, "sunsubscribe"), readPushed(t, cliA))
+	require.Equal(t, confirmKind("s1", 0, "sunsubscribe"), (<-unsub).v)
+	require.Equal(t, "PONG", dispatchPub(r, srvA, "PING").S)
+}
+
+// WM: 各域独立退订——SUNSUBSCRIBE 只清 shard（pattern 保留仍订阅态），PUNSUBSCRIBE 后恢复
+func Test_PubSub_when_SunsubscribeMixedKeepsPattern(t *testing.T) {
+	r, _, srvA, _, _, _ := openPubSubSetup(t)
+	require.Equal(t, confirmKind("q1", 1, "ssubscribe"), dispatchPub(r, srvA, "SSUBSCRIBE", "q1"))
+	require.Equal(t, confirmKind("qp*", 1, "psubscribe"), dispatchPub(r, srvA, "PSUBSCRIBE", "qp*"))
+	require.Equal(t, confirmKind("q1", 0, "sunsubscribe"), dispatchPub(r, srvA, "SUNSUBSCRIBE"))
+	require.Equal(t, protocol.ArrayOf(protocol.BulkOf("pong"), protocol.BulkOf("")),
+		dispatchPub(r, srvA, "PING"))
+	require.Equal(t, confirmKind("qp*", 0, "punsubscribe"), dispatchPub(r, srvA, "PUNSUBSCRIBE"))
+	require.Equal(t, "PONG", dispatchPub(r, srvA, "PING").S)
+}
+
+// WM: SPUBLISH 只投 shard 订阅者（smessage），count = 命中连接数；对普通订阅不投
+func Test_PubSub_when_SpublishDelivers(t *testing.T) {
+	r, _, srvA, cliA, srvB, _ := openPubSubSetup(t)
+	require.Equal(t, confirmKind("c1", 1, "ssubscribe"), dispatchPub(r, srvA, "SSUBSCRIBE", "c1"))
+	require.Equal(t, int64(1), dispatchPub(r, srvB, "SPUBLISH", "c1", "hello").I)
+	require.Equal(t, protocol.ArrayOf(
+		protocol.BulkOf("smessage"),
+		protocol.BulkOf("c1"),
+		protocol.BulkOf("hello"),
+	), readPushed(t, cliA))
+	require.Equal(t, int64(0), dispatchPub(r, srvB, "SPUBLISH", "noone", "v").I)
+	require.Equal(t, int64(0), dispatchPub(r, srvB, "PUBLISH", "c1", "v").I)
+	cliA.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	_, err := protocol.Decode(bufio.NewReader(cliA))
+	require.Error(t, err)
+}
+
+// WM: 普通订阅者收不到 SPUBLISH；同连接普通+pattern+shard：PUBLISH :2、SPUBLISH :1
+func Test_PubSub_when_SpublishSkipsRegularAndDualCount(t *testing.T) {
+	r, _, srvA, cliA, srvB, _ := openPubSubSetup(t)
+	require.Equal(t, confirmKind("both", 1, "subscribe"), dispatchPub(r, srvA, "SUBSCRIBE", "both"))
+	require.Equal(t, int64(0), dispatchPub(r, srvB, "SPUBLISH", "both", "v").I)
+	cliA.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	_, err := protocol.Decode(bufio.NewReader(cliA))
+	require.Error(t, err)
+	cliA.SetReadDeadline(time.Time{})
+	dispatchPub(r, srvA, "PSUBSCRIBE", "bo*")
+	dispatchPub(r, srvA, "SSUBSCRIBE", "both")
+	require.Equal(t, int64(2), dispatchPub(r, srvB, "PUBLISH", "both", "x").I)
+	require.Equal(t, protocol.ArrayOf(
+		protocol.BulkOf("message"), protocol.BulkOf("both"), protocol.BulkOf("x"),
+	), readPushed(t, cliA))
+	require.Equal(t, protocol.ArrayOf(
+		protocol.BulkOf("pmessage"), protocol.BulkOf("bo*"), protocol.BulkOf("both"), protocol.BulkOf("x"),
+	), readPushed(t, cliA))
+	require.Equal(t, int64(1), dispatchPub(r, srvB, "SPUBLISH", "both", "x").I)
+	require.Equal(t, protocol.ArrayOf(
+		protocol.BulkOf("smessage"), protocol.BulkOf("both"), protocol.BulkOf("x"),
+	), readPushed(t, cliA))
+}
+
+// WM: 同名频道双命名空间——查询与投递互不渗透（CHANNELS/SHARDCHANNELS、NUMSUB/SHARDNUMSUB 各计各的）
+func Test_PubSub_when_NamespacesIndependentQueries(t *testing.T) {
+	r, _, srvA, cliA, srvB, cliB := openPubSubSetup(t)
+	q := newPubSubConn(t)
+	require.Equal(t, confirmKind("dup", 1, "subscribe"), dispatchPub(r, srvA, "SUBSCRIBE", "dup"))
+	require.Equal(t, confirmKind("dup", 1, "ssubscribe"), dispatchPub(r, srvB, "SSUBSCRIBE", "dup"))
+	require.Equal(t, protocol.ArrayOf(protocol.BulkOf("dup")),
+		dispatchPub(r, q, "PUBSUB", "CHANNELS"))
+	require.Equal(t, protocol.ArrayOf(protocol.BulkOf("dup")),
+		dispatchPub(r, q, "PUBSUB", "SHARDCHANNELS"))
+	require.Equal(t, protocol.ArrayOf(
+		protocol.BulkOf("dup"), protocol.Value{Kind: protocol.KindInteger, I: 1},
+	), dispatchPub(r, q, "PUBSUB", "NUMSUB", "dup"))
+	require.Equal(t, protocol.ArrayOf(
+		protocol.BulkOf("dup"), protocol.Value{Kind: protocol.KindInteger, I: 1},
+	), dispatchPub(r, q, "PUBSUB", "SHARDNUMSUB", "dup"))
+	require.Equal(t, int64(1), dispatchPub(r, q, "PUBLISH", "dup", "v").I)
+	require.Equal(t, int64(1), dispatchPub(r, q, "SPUBLISH", "dup", "w").I)
+	require.Equal(t, protocol.ArrayOf(
+		protocol.BulkOf("message"), protocol.BulkOf("dup"), protocol.BulkOf("v"),
+	), readPushed(t, cliA))
+	require.Equal(t, protocol.ArrayOf(
+		protocol.BulkOf("smessage"), protocol.BulkOf("dup"), protocol.BulkOf("w"),
+	), readPushed(t, cliB))
+	cliA.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	_, err := protocol.Decode(bufio.NewReader(cliA))
+	require.Error(t, err)
+	cliB.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	_, err = protocol.Decode(bufio.NewReader(cliB))
+	require.Error(t, err)
+}
+
+// WM: SHARDCHANNELS/SHARDNUMSUB 只扫 shard 域——glob 过滤、空表 *0、
+// CHANNELS/NUMSUB 不列不计 shard 订阅
+func Test_PubSub_when_ShardQueries(t *testing.T) {
+	r, _, srvA, _, srvB, _ := openPubSubSetup(t)
+	q := newPubSubConn(t)
+	require.Equal(t, emptyArray(), dispatchPub(r, q, "PUBSUB", "SHARDCHANNELS"))
+	require.Equal(t, emptyArray(), dispatchPub(r, q, "PUBSUB", "SHARDNUMSUB"))
+	require.Equal(t, confirmKind("s1", 1, "ssubscribe"), dispatchPub(r, srvA, "SSUBSCRIBE", "s1"))
+	require.Equal(t, confirmKind("s2", 1, "ssubscribe"), dispatchPub(r, srvB, "SSUBSCRIBE", "s2"))
+	require.Equal(t, confirmKind("p*", 1, "psubscribe"), dispatchPub(r, srvB, "PSUBSCRIBE", "p*"))
+	require.Equal(t, confirmKind("r1", 1, "subscribe"), dispatchPub(r, srvA, "SUBSCRIBE", "r1"))
+	require.Equal(t, protocol.ArrayOf(protocol.BulkOf("s1"), protocol.BulkOf("s2")),
+		dispatchPub(r, q, "PUBSUB", "SHARDCHANNELS"))
+	require.Equal(t, protocol.ArrayOf(protocol.BulkOf("s2")),
+		dispatchPub(r, q, "PUBSUB", "SHARDCHANNELS", "s2*"))
+	require.Equal(t, protocol.ArrayOf(protocol.BulkOf("r1")),
+		dispatchPub(r, q, "PUBSUB", "CHANNELS"))
+	require.Equal(t, protocol.ArrayOf(
+		protocol.BulkOf("s1"), protocol.Value{Kind: protocol.KindInteger, I: 1},
+		protocol.BulkOf("s2"), protocol.Value{Kind: protocol.KindInteger, I: 1},
+		protocol.BulkOf("nope"), protocol.Value{Kind: protocol.KindInteger, I: 0},
+	), dispatchPub(r, q, "PUBSUB", "SHARDNUMSUB", "s1", "s2", "nope"))
+	require.Equal(t, protocol.ArrayOf(
+		protocol.BulkOf("r1"), protocol.Value{Kind: protocol.KindInteger, I: 1},
+		protocol.BulkOf("s1"), protocol.Value{Kind: protocol.KindInteger, I: 0},
+	), dispatchPub(r, q, "PUBSUB", "NUMSUB", "r1", "s1"))
+}
+
+func subErr(name string) string {
+	return "ERR Can't execute '" + name +
+		"': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
+}
+
+// WM: shard-only 订阅态同样触发拦截（含 SPUBLISH 与 PUBSUB SHARD*，拦截优先于
+// SHARDCHANNELS 多参错）；PING 是 [pong data] 形；全退订后恢复正常分发
+func Test_PubSub_when_ShardSubModeRejects(t *testing.T) {
+	r, _, srvA, _, _, _ := openPubSubSetup(t)
+	require.Equal(t, confirmKind("c1", 1, "ssubscribe"), dispatchPub(r, srvA, "SSUBSCRIBE", "c1"))
+	require.Equal(t, subErr("set"), dispatchPub(r, srvA, "SET", "k", "v").S)
+	require.Equal(t, subErr("publish"), dispatchPub(r, srvA, "PUBLISH", "c1", "v").S)
+	require.Equal(t, subErr("spublish"), dispatchPub(r, srvA, "SPUBLISH", "c1", "v").S)
+	require.Equal(t, subErr("pubsub|shardchannels"), dispatchPub(r, srvA, "PUBSUB", "SHARDCHANNELS").S)
+	require.Equal(t, subErr("pubsub|shardchannels"),
+		dispatchPub(r, srvA, "PUBSUB", "SHARDCHANNELS", "a", "b").S)
+	require.Equal(t, subErr("pubsub|shardnumsub"),
+		dispatchPub(r, srvA, "PUBSUB", "SHARDNUMSUB", "x", "y").S)
+	require.Equal(t, "ERR unknown subcommand 'foo'. Try PUBSUB HELP.",
+		dispatchPub(r, srvA, "PUBSUB", "foo").S)
+	require.Equal(t, protocol.ArrayOf(protocol.BulkOf("pong"), protocol.BulkOf("")),
+		dispatchPub(r, srvA, "PING"))
+	require.Equal(t, protocol.ArrayOf(protocol.BulkOf("pong"), protocol.BulkOf("hello")),
+		dispatchPub(r, srvA, "PING", "hello"))
+	require.Equal(t, confirmKind("c2", 1, "subscribe"), dispatchPub(r, srvA, "SUBSCRIBE", "c2"))
+	require.Equal(t, confirmKind("c2", 0, "unsubscribe"), dispatchPub(r, srvA, "UNSUBSCRIBE", "c2"))
+	require.Equal(t, confirmKind("c1", 0, "sunsubscribe"), dispatchPub(r, srvA, "SUNSUBSCRIBE", "c1"))
+	after := dispatchPub(r, srvA, "NOSUCHCMD", "a")
+	require.Equal(t, protocol.KindError, after.Kind)
+	require.Contains(t, after.S, "unknown command")
+}
+
+// WM: shard 命令参数错误面（非订阅态，与 7.2.6 实测措辞一致）——
+// ssubscribe 0 参、spublish 1/3 参、shardchannels 多参、shardnumsub 无参合法回 *0
+func Test_PubSub_when_ShardArityErrors(t *testing.T) {
+	r, _, srvA, _, _, _ := openPubSubSetup(t)
+	require.Equal(t, "ERR wrong number of arguments for 'ssubscribe' command",
+		dispatchPub(r, srvA, "SSUBSCRIBE").S)
+	require.Equal(t, "ERR wrong number of arguments for 'ssubscribe' command",
+		dispatchPub(r, srvA, "ssubscribe").S)
+	require.Equal(t, "ERR wrong number of arguments for 'spublish' command",
+		dispatchPub(r, srvA, "SPUBLISH", "c").S)
+	require.Equal(t, "ERR wrong number of arguments for 'spublish' command",
+		dispatchPub(r, srvA, "SPUBLISH", "a", "b", "c").S)
+	require.Equal(t, "ERR wrong number of arguments for 'spublish' command",
+		dispatchPub(r, srvA, "spublish", "c").S)
+	require.Equal(t,
+		"ERR unknown subcommand or wrong number of arguments for 'SHARDCHANNELS'. Try PUBSUB HELP.",
+		dispatchPub(r, srvA, "PUBSUB", "SHARDCHANNELS", "a", "b").S)
+	require.Equal(t,
+		"ERR unknown subcommand or wrong number of arguments for 'shardchannels'. Try PUBSUB HELP.",
+		dispatchPub(r, srvA, "PUBSUB", "shardchannels", "a", "b").S)
+	require.Equal(t, emptyArray(), dispatchPub(r, srvA, "PUBSUB", "SHARDNUMSUB"))
+	require.Equal(t, protocol.ArrayOf(
+		protocol.BulkOf("x"), protocol.Value{Kind: protocol.KindInteger, I: 0},
+		protocol.BulkOf("y"), protocol.Value{Kind: protocol.KindInteger, I: 0},
+	), dispatchPub(r, srvA, "PUBSUB", "SHARDNUMSUB", "x", "y"))
+}
