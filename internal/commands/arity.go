@@ -148,6 +148,7 @@ func CommandArity() map[string]int {
 		"RPOPLPUSH":            3,
 		"RPUSH":                -3,
 		"SADD":                 -3,
+		"SAVE":                 1,
 		"SCAN":                 -2,
 		"SCARD":                2,
 		"SCRIPT":               -2,

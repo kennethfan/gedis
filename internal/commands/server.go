@@ -41,6 +41,7 @@ func RegisterServer(r *network.Router, kv KV, stats *network.Stats, hub *replica
 	r.Register("DEBUG", h.debug)
 	r.Register("BGSAVE", h.unsupportedPersistence)
 	r.Register("BGREWRITEAOF", h.unsupportedPersistence)
+	r.Register("SAVE", h.unsupportedPersistence)
 	return h
 }
 
@@ -58,6 +59,7 @@ var serverMeta = []acl.Meta{
 	{Name: "DEBUG", Category: "admin", Keys: acl.KeySpec{First: -1}},
 	{Name: "BGSAVE", Category: "admin", Keys: acl.KeySpec{First: -1}},
 	{Name: "BGREWRITEAOF", Category: "admin", Keys: acl.KeySpec{First: -1}},
+	{Name: "SAVE", Category: "admin", Keys: acl.KeySpec{First: -1}},
 }
 
 type serverHandler struct {
