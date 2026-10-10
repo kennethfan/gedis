@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kennethfan/gedis/internal/protocol"
+	"github.com/kennethfan/gedis/internal/tlsdial"
 )
 
 // ErrUnknownMaster 在 failover 未知 master 名时返回。
@@ -184,7 +185,7 @@ func sendReplicaof(addr string, args ...string) error {
 }
 
 func dialAndSend(addr string, args []string) error {
-	conn, err := net.DialTimeout("tcp", addr, replicaofTimeout)
+	conn, err := tlsdial.DialTimeout("tcp", addr, replicaofTimeout)
 	if err != nil {
 		return err
 	}

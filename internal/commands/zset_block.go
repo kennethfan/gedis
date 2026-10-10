@@ -15,6 +15,7 @@ var zsetBlockMeta = []acl.Meta{
 	{Name: "BZPOPMIN", Category: "sortedset", Keys: acl.KeySpec{Custom: acl.AllButLast}},
 	{Name: "BZPOPMAX", Category: "sortedset", Keys: acl.KeySpec{Custom: acl.AllButLast}},
 	{Name: "BZMPOP", Category: "sortedset", Keys: acl.KeySpec{Custom: acl.NumkeysKeys(1, 2)}},
+	{Name: "ZMPOP", Category: "sortedset", Keys: acl.KeySpec{Custom: acl.NumkeysKeys(0, 1)}},
 }
 
 func (h *zsetHandler) registerBlockZ(r *network.Router) {
@@ -24,6 +25,7 @@ func (h *zsetHandler) registerBlockZ(r *network.Router) {
 	r.Register("BZPOPMIN", h.bzpopmin)
 	r.Register("BZPOPMAX", h.bzpopmax)
 	r.Register("BZMPOP", h.bzmpop)
+	r.Register("ZMPOP", h.zmpop)
 }
 
 // tryZPopSingle 从单个 key 弹 count 个元素：rev=false 取最小端。
@@ -131,6 +133,88 @@ func (h *zsetHandler) bzpop(ctx context.Context, args []protocol.Value, rev bool
 		return protocol.Value{Kind: protocol.KindArray}
 	}
 	return zpopReply(k, popped)
+}
+
+// zmpop 实现 ZMPOP numkeys key [key ...] MIN|MAX [COUNT n]：
+// BZMPOP 的非阻塞单轮，首个非空 key 弹出后即返；全空回 nil array。
+func (h *zsetHandler) zmpop(ctx context.Context, args []protocol.Value) protocol.Value {
+	if len(args) < 3 {
+		return errValueStr("ERR wrong number of arguments for 'zmpop' command")
+	}
+	numkeysStr, ok := argString(args[0])
+	if !ok {
+		return errValueStr("ERR value is not an integer or out of range")
+	}
+	numkeys, err := strconv.ParseInt(numkeysStr, 10, 64)
+	if err != nil || numkeys <= 0 || int(numkeys) > len(args)-1 {
+		return errValueStr("ERR value is not an integer or out of range")
+	}
+	keys := make([]string, 0, numkeys)
+	for _, a := range args[1 : 1+numkeys] {
+		k, ok := argString(a)
+		if !ok {
+			return errValueStr("ERR invalid key")
+		}
+		keys = append(keys, k)
+	}
+	rest := args[1+numkeys:]
+	if len(rest) < 1 || len(rest) > 3 {
+		return errValueStr("ERR syntax error")
+	}
+	dirStr, ok := argString(rest[0])
+	if !ok {
+		return errValueStr("ERR syntax error")
+	}
+	var rev bool
+	switch strings.ToUpper(dirStr) {
+	case "MIN":
+		rev = false
+	case "MAX":
+		rev = true
+	default:
+		return errValueStr("ERR syntax error")
+	}
+	var count int64 = 1
+	if len(rest) == 3 {
+		where, ok := argString(rest[1])
+		if !ok || !strings.EqualFold(where, "COUNT") {
+			return errValueStr("ERR syntax error")
+		}
+		cstr, ok := argString(rest[2])
+		if !ok {
+			return errValueStr("ERR value is not an integer or out of range")
+		}
+		count, ok = parseCount(cstr)
+		if !ok || count < 1 {
+			return errValueStr("ERR value is out of range, must be positive")
+		}
+	} else if len(rest) == 2 {
+		return errValueStr("ERR syntax error")
+	}
+	for _, k := range keys {
+		if _, _, err := h.readZSet(ctx, k); err != nil && !isNotFound(err) {
+			return errValue(err)
+		}
+	}
+	for _, k := range keys {
+		popped, found, perr := h.tryZPopSingle(ctx, k, count, rev)
+		if perr != nil {
+			return errValue(perr)
+		}
+		if found {
+			pairs := make([]protocol.Value, 0, len(popped))
+			for _, p := range popped {
+				pairs = append(pairs, protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
+					protocol.BulkOf(p.m), protocol.BulkOf(formatScore(p.s)),
+				}})
+			}
+			return protocol.Value{Kind: protocol.KindArray, Elems: []protocol.Value{
+				protocol.BulkOf(k),
+				{Kind: protocol.KindArray, Elems: pairs},
+			}}
+		}
+	}
+	return protocol.Value{Kind: protocol.KindArray}
 }
 
 // bzmpop 实现 BZMPOP timeout numkeys key [key ...] MIN|MAX [COUNT n]。

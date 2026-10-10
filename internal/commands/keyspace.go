@@ -2,7 +2,9 @@ package commands
 
 import (
 	"context"
+	"math/rand"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +19,8 @@ var keyspaceMeta = []acl.Meta{
 	{Name: "TYPE", Category: "keyspace", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "EXISTS", Category: "keyspace", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "KEYS", Category: "keyspace", ReadOnly: true, Keys: acl.KeySpec{First: -1}},
+	{Name: "MOVE", Category: "keyspace", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "RANDOMKEY", Category: "keyspace", ReadOnly: true, Keys: acl.KeySpec{First: -1}},
 }
 
 func (s *stringHandler) registerKeyspace(r *network.Router) {
@@ -26,6 +30,8 @@ func (s *stringHandler) registerKeyspace(r *network.Router) {
 	r.Register("TYPE", s.type_)
 	r.Register("EXISTS", s.exists)
 	r.Register("KEYS", s.keys)
+	r.Register("MOVE", s.move)
+	r.Register("RANDOMKEY", s.randomKey)
 }
 
 // typePrefixes 是全部类型前缀表；getAny 按表逐个探测，List/Set/ZSet
@@ -61,6 +67,7 @@ func lookupRaw(ctx context.Context, kv KV, key string) ([]byte, datastruct.Entry
 			_ = kv.Delete(ctx, raw)
 			_ = kv.Delete(ctx, datastruct.HashExpKey(key))
 			network.StatsFromContext(ctx).IncExpired()
+			Notify("x", "expired", key)
 			return nil, datastruct.Entry{}, storage.ErrNotFound
 		}
 		return raw, e, nil
@@ -190,4 +197,53 @@ func (s *stringHandler) keys(ctx context.Context, args []protocol.Value) protoco
 		out = append(out, protocol.BulkOf(name))
 	}
 	return protocol.Value{Kind: protocol.KindArray, Elems: out}
+}
+
+// move 实现 MOVE：单库引擎，同库回源/目标相同错，异库恒回 0
+// （无处可搬；miss 同样 0，对齐真机 miss 语义）。
+func (s *stringHandler) move(ctx context.Context, args []protocol.Value) protocol.Value {
+	if len(args) != 2 {
+		return errValueStr("ERR wrong number of arguments for 'move' command")
+	}
+	key, ok := argString(args[0])
+	if !ok {
+		return errValueStr("ERR invalid key")
+	}
+	dbStr, ok := argString(args[1])
+	if !ok {
+		return errValueStr("ERR value is not an integer or out of range")
+	}
+	db, err := strconv.Atoi(dbStr)
+	if err != nil {
+		return errValueStr("ERR value is not an integer or out of range")
+	}
+	if db < 0 {
+		return errValueStr("ERR DB index is out of range")
+	}
+	if db == 0 {
+		return errValueStr("ERR source and destination objects are the same")
+	}
+	if _, err := s.getAny(ctx, key); err != nil {
+		if isNotFound(err) {
+			return protocol.Value{Kind: protocol.KindInteger, I: 0}
+		}
+		return errValue(err)
+	}
+	// TODO(真机对齐): 单库实现恒不移库；多库支持落地时在此成功分支补
+	// Notify("g","move_from",key)+Notify("g","move_to",dst)（事件表要求）。
+	return protocol.Value{Kind: protocol.KindInteger, I: 0}
+}
+
+func (s *stringHandler) randomKey(ctx context.Context, args []protocol.Value) protocol.Value {
+	if len(args) != 0 {
+		return errValueStr("ERR wrong number of arguments for 'randomkey' command")
+	}
+	names, _, err := allUserKeys(ctx, s.kv)
+	if err != nil {
+		return errValue(err)
+	}
+	if len(names) == 0 {
+		return protocol.Value{Kind: protocol.KindBulkString}
+	}
+	return protocol.BulkOf(names[rand.Intn(len(names))])
 }

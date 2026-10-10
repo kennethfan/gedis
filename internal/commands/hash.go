@@ -20,6 +20,7 @@ var hashMeta = []acl.Meta{
 	{Name: "HSETNX", Category: "hash", Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "HEXISTS", Category: "hash", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "HLEN", Category: "hash", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "HSTRLEN", Category: "hash", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
 }
 
 func RegisterHash(r *network.Router, kv KV) {
@@ -33,6 +34,7 @@ func RegisterHash(r *network.Router, kv KV) {
 	r.Register("HSETNX", h.hsetnx)
 	r.Register("HEXISTS", h.hexists)
 	r.Register("HLEN", h.hlen)
+	r.Register("HSTRLEN", h.hstrlen)
 	h.registerMulti(r)
 	h.registerIncr(r)
 	h.registerHashExpire(r)
@@ -75,6 +77,7 @@ func (h *hashHandler) readHash(ctx context.Context, key string) (map[string]stri
 			if werr := h.writeFieldExp(ctx, key, exp); werr != nil {
 				return nil, 0, werr
 			}
+			Notify("h", "hexpired", key)
 		}
 	}
 	return m, e.Expiry, nil
@@ -124,6 +127,7 @@ func (h *hashHandler) hset(ctx context.Context, args []protocol.Value) protocol.
 	if err := h.writeHash(ctx, key, m, expiry); err != nil {
 		return errValue(err)
 	}
+	Notify("h", "hset", key)
 	return protocol.Value{Kind: protocol.KindInteger, I: added}
 }
 
@@ -185,12 +189,22 @@ func (h *hashHandler) hdel(ctx context.Context, args []protocol.Value) protocol.
 			expDirty = true
 		}
 	}
-	if err := h.writeHash(ctx, key, m, expiry); err != nil {
+	if len(m) == 0 && deleted > 0 {
+		if err := h.kv.Delete(ctx, datastruct.HashKey(key)); err != nil {
+			return errValue(err)
+		}
+	} else if err := h.writeHash(ctx, key, m, expiry); err != nil {
 		return errValue(err)
 	}
 	if expDirty {
 		if err := h.writeFieldExp(ctx, key, exp); err != nil {
 			return errValue(err)
+		}
+	}
+	if deleted > 0 {
+		Notify("h", "hdel", key)
+		if len(m) == 0 {
+			Notify("g", "del", key)
 		}
 	}
 	return protocol.Value{Kind: protocol.KindInteger, I: deleted}
@@ -226,6 +240,7 @@ func (h *hashHandler) hsetnx(ctx context.Context, args []protocol.Value) protoco
 	if err := h.writeHash(ctx, key, m, expiry); err != nil {
 		return errValue(err)
 	}
+	Notify("h", "hset", key)
 	return protocol.Value{Kind: protocol.KindInteger, I: 1}
 }
 
@@ -270,4 +285,26 @@ func (h *hashHandler) hlen(ctx context.Context, args []protocol.Value) protocol.
 		return errValue(err)
 	}
 	return protocol.Value{Kind: protocol.KindInteger, I: int64(len(m))}
+}
+
+func (h *hashHandler) hstrlen(ctx context.Context, args []protocol.Value) protocol.Value {
+	if len(args) != 2 {
+		return errValueStr("ERR wrong number of arguments for 'hstrlen' command")
+	}
+	key, ok := argString(args[0])
+	if !ok {
+		return errValueStr("ERR invalid key")
+	}
+	field, ok := argString(args[1])
+	if !ok {
+		return errValueStr("ERR invalid field")
+	}
+	m, _, err := h.readHash(ctx, key)
+	if err != nil {
+		if isNotFound(err) {
+			return protocol.Value{Kind: protocol.KindInteger, I: 0}
+		}
+		return errValue(err)
+	}
+	return protocol.Value{Kind: protocol.KindInteger, I: int64(len(m[field]))}
 }

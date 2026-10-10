@@ -18,7 +18,7 @@ func newSentinelRouter(master, slave string, pub *PubSubRegistry) (*network.Rout
 		{Name: "mymaster", MasterAddr: master, Slaves: []string{slave}},
 	}, 5*time.Second)
 	r := network.DefaultRouter()
-	RegisterSentinel(r, reg, "127.0.0.1:26379", pub)
+	RegisterSentinel(r, reg, "127.0.0.1:26379", pub, "test-runid")
 	return r, reg
 }
 
@@ -138,4 +138,47 @@ func startSentinelStub(t *testing.T) string {
 		}
 	}()
 	return ln.Addr().String()
+}
+
+func TestSentinel_MyID(t *testing.T) {
+	r := network.DefaultRouter()
+	reg := sentinel.NewRegistry(nil, 5*time.Second)
+	RegisterSentinel(r, reg, "127.0.0.1:26379", nil, "myrunid42")
+	reply := r.Dispatch(context.Background(), sentinelCmd("SENTINEL", "myid"))
+	require.Equal(t, protocol.BulkOf("myrunid42"), reply)
+	bad := r.Dispatch(context.Background(), sentinelCmd("SENTINEL", "myid", "x"))
+	require.Equal(t, protocol.KindError, bad.Kind)
+}
+
+func TestSentinel_ReplicasIsSlaveAlias(t *testing.T) {
+	r, _ := newSentinelRouter("127.0.0.1:6380", "127.0.0.1:6381", nil)
+	a := r.Dispatch(context.Background(), sentinelCmd("SENTINEL", "slaves", "mymaster"))
+	b := r.Dispatch(context.Background(), sentinelCmd("SENTINEL", "replicas", "mymaster"))
+	require.Equal(t, a, b)
+	unknown := r.Dispatch(context.Background(), sentinelCmd("SENTINEL", "replicas", "nope"))
+	require.Equal(t, protocol.KindError, unknown.Kind)
+	require.Contains(t, unknown.S, "No such master")
+}
+
+func TestSentinel_CkQuorum(t *testing.T) {
+	r, _ := newSentinelRouter("127.0.0.1:6380", "127.0.0.1:6381", nil)
+	ok := r.Dispatch(context.Background(), sentinelCmd("SENTINEL", "ckquorum", "mymaster"))
+	require.Equal(t, protocol.KindSimpleString, ok.Kind)
+	require.Equal(t, "OK", ok.S)
+	unknown := r.Dispatch(context.Background(), sentinelCmd("SENTINEL", "ckquorum", "nope"))
+	require.Equal(t, protocol.KindError, unknown.Kind)
+	r2 := network.DefaultRouter()
+	reg2 := sentinel.NewRegistry([]sentinel.NodeSpec{
+		{Name: "big", MasterAddr: "127.0.0.1:6380", Quorum: 5},
+	}, 5*time.Second)
+	RegisterSentinel(r2, reg2, "127.0.0.1:26379", nil, "runid")
+	short := r2.Dispatch(context.Background(), sentinelCmd("SENTINEL", "ckquorum", "big"))
+	require.Equal(t, protocol.KindError, short.Kind)
+}
+
+func TestSentinel_MonitorStaticTopo(t *testing.T) {
+	r, _ := newSentinelRouter("127.0.0.1:6380", "127.0.0.1:6381", nil)
+	reply := r.Dispatch(context.Background(), sentinelCmd("SENTINEL", "monitor", "m2", "127.0.0.1", "6380", "2"))
+	require.Equal(t, protocol.KindError, reply.Kind)
+	require.Contains(t, reply.S, "MONITOR")
 }

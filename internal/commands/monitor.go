@@ -53,6 +53,9 @@ type monitorHandler struct {
 	hub   *replication.Hub
 }
 
+// processStartUnix 供 INFO persistence 段与 LASTSAVE 对齐（进程启动秒）。
+var processStartUnix = time.Now().Unix()
+
 func (h *monitorHandler) info(ctx context.Context, args []protocol.Value) protocol.Value {
 	section := "all"
 	if len(args) > 1 {
@@ -80,6 +83,7 @@ func (h *monitorHandler) info(ctx context.Context, args []protocol.Value) protoc
 	write("server", h.serverSection(snap))
 	write("clients", h.clientsSection(snap))
 	write("memory", h.memorySection())
+	write("persistence", h.persistenceSection())
 	write("stats", h.statsSection(snap))
 	write("replication", h.replicationSection(snap))
 	if section == "all" || section == "keyspace" {
@@ -163,6 +167,12 @@ func (h *monitorHandler) config(_ context.Context, args []protocol.Value) protoc
 		return errValueStr("ERR syntax error")
 	}
 	switch strings.ToUpper(sub) {
+	case "RESETSTAT":
+		if len(args) != 1 {
+			return errValueStr("ERR wrong number of arguments for 'config|resetstat' command")
+		}
+		h.stats.Reset()
+		return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
 	case "GET":
 		if len(args) != 2 {
 			return errValueStr("ERR wrong number of arguments for 'config|get' command")
@@ -178,6 +188,7 @@ func (h *monitorHandler) config(_ context.Context, args []protocol.Value) protoc
 		params := [][2]string{
 			{"maxmemory", strconv.FormatInt(mi.MaxBytes(), 10)},
 			{"maxmemory-policy", mi.Policy()},
+			{"notify-keyspace-events", h.getNotify()},
 		}
 		out := make([]protocol.Value, 0, 4)
 		for _, p := range params {
@@ -205,6 +216,11 @@ func (h *monitorHandler) config(_ context.Context, args []protocol.Value) protoc
 			return errValueStr("ERR memory info unavailable")
 		}
 		switch strings.ToLower(name) {
+		case "notify-keyspace-events":
+			if err := h.setNotify(val); err != nil {
+				return errValue(err)
+			}
+			return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
 		case "maxmemory":
 			n, err := strconv.ParseInt(val, 10, 64)
 			if err != nil || n < 0 {
@@ -220,9 +236,34 @@ func (h *monitorHandler) config(_ context.Context, args []protocol.Value) protoc
 		default:
 			return errValueStr("ERR Unknown parameter '" + name + "'")
 		}
+	case "REWRITE":
+		if len(args) != 1 {
+			return errValueStr("ERR wrong number of arguments for 'config|rewrite' command")
+		}
+		return errValueStr("ERR not supported on this engine: config rewrite not implemented")
 	default:
 		return errValueStr("ERR unknown subcommand for 'config' command")
 	}
+}
+
+func (h *monitorHandler) getNotify() string {
+	return NotifyString()
+}
+
+func (h *monitorHandler) setNotify(v string) error {
+	return SetNotifyString(v)
+}
+
+// persistenceSection 持久化段：无 RDB/AOF，后台保存恒 ok，
+// 最后保存时刻取进程启动秒（与 LASTSAVE 对齐）。
+func (h *monitorHandler) persistenceSection() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "rdb_changes_since_last_save:0\r\n")
+	fmt.Fprintf(&b, "rdb_bgsave_in_progress:0\r\n")
+	fmt.Fprintf(&b, "rdb_last_save_time:%d\r\n", processStartUnix)
+	fmt.Fprintf(&b, "rdb_last_bgsave_status:ok\r\n")
+	fmt.Fprintf(&b, "aof_enabled:0\r\n")
+	return b.String()
 }
 
 func (h *monitorHandler) statsSection(snap network.StatsView) string {

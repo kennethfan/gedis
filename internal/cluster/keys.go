@@ -19,6 +19,8 @@ func KeysOf(cmd string, args []string) ([]string, bool) {
 	switch cmd {
 	case "EVAL", "EVALSHA", "EVAL_RO", "EVALSHA_RO":
 		return evalKeys(args)
+	case "FCALL", "FCALL_RO":
+		return fcallKeys(args)
 	case "XREAD", "XREADGROUP":
 		return xreadKeys(args)
 	case "SORT":
@@ -49,7 +51,7 @@ func KeysOf(cmd string, args []string) ([]string, bool) {
 	case "BITOP":
 		// BITOP op dest srckey…：dest 与源必须同槽
 		return allNonEmpty(args)
-	case "COPY", "RENAME", "RENAMENX":
+	case "COPY", "RENAME", "RENAMENX", "LCS":
 		return allNonEmpty(args[:min(2, len(args))])
 	case "SMOVE":
 		if len(args) >= 2 {
@@ -88,7 +90,7 @@ func KeysOf(cmd string, args []string) ([]string, bool) {
 			return nil, false
 		}
 		return allNonEmpty(append([]string{args[0]}, args[2:2+n]...))
-	case "ZUNION", "ZINTER", "ZDIFF":
+	case "ZUNION", "ZINTER", "ZDIFF", "ZINTERCARD":
 		if len(args) < 2 {
 			return nil, false
 		}
@@ -97,7 +99,7 @@ func KeysOf(cmd string, args []string) ([]string, bool) {
 			return nil, false
 		}
 		return allNonEmpty(args[1 : 1+n])
-	case "LMPOP", "BLMPOP":
+	case "LMPOP", "BLMPOP", "ZMPOP", "BZMPOP":
 		// LMPOP numkeys key…：与 ZUNION 同形（无 dest）
 		if len(args) < 2 {
 			return nil, false
@@ -142,6 +144,21 @@ func evalKeys(args []string) ([]string, bool) {
 		return nil, false
 	}
 	return allNonEmpty(args[1 : 1+n])
+}
+
+// fcallKeys FCALL fn numkeys key… arg…：numkeys 在 args[1]（fn 名占位 args[0]）。
+func fcallKeys(args []string) ([]string, bool) {
+	if len(args) < 2 {
+		return nil, false
+	}
+	n, err := strconv.Atoi(args[1])
+	if err != nil || n < 0 || n > len(args)-2 {
+		return nil, false
+	}
+	if n == 0 {
+		return nil, false
+	}
+	return allNonEmpty(args[2 : 2+n])
 }
 
 // xreadKeys 取 STREAMS 之后前半段 key；无 STREAMS 直通。
@@ -198,10 +215,12 @@ func allNonEmpty(args []string) ([]string, bool) {
 func singleFirstCmd(cmd string) bool {
 	switch cmd {
 	case "GET", "SET", "SETNX", "GETSET", "GETDEL", "GETEX",
-		"SETEX", "PSETEX", "SETRANGE", "GETRANGE", "STRLEN", "APPEND",
+		"SETEX", "PSETEX", "SETRANGE", "GETRANGE", "SUBSTR", "STRLEN", "APPEND",
 		"INCR", "DECR", "INCRBY", "DECRBY", "INCRBYFLOAT",
 		"HSET", "HGET", "HGETALL", "HKEYS", "HVALS", "HLEN", "HDEL",
 		"HEXISTS", "HMGET", "HSETNX", "HINCRBY", "HINCRBYFLOAT", "HSTRLEN", "HRANDFIELD",
+		"HEXPIRE", "HEXPIREAT", "HPEXPIRE", "HPEXPIREAT", "HTTL", "HPTTL", "HPERSIST",
+		"HEXPIRETIME", "HPEXPIRETIME",
 		"LPUSH", "RPUSH", "LPUSHX", "RPUSHX", "LPOP", "RPOP", "LLEN",
 		"LRANGE", "LINDEX", "LSET", "LTRIM", "LREM", "LINSERT", "LMOVE",
 		"RPOPLPUSH", "BRPOPLPUSH", "BLPOP", "BRPOP", "BLMOVE",

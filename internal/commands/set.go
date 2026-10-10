@@ -120,6 +120,7 @@ func (h *setHandler) sadd(ctx context.Context, args []protocol.Value) protocol.V
 	if err := h.writeSet(ctx, key, set, expiry); err != nil {
 		return errValue(err)
 	}
+	Notify("s", "sadd", key)
 	return protocol.Value{Kind: protocol.KindInteger, I: added}
 }
 
@@ -153,8 +154,14 @@ func (h *setHandler) srem(ctx context.Context, args []protocol.Value) protocol.V
 		if derr := h.kv.Delete(ctx, datastruct.SetKey(key)); derr != nil {
 			return errValue(derr)
 		}
+		if deleted > 0 {
+			Notify("s", "srem", key)
+			Notify("g", "del", key)
+		}
 	} else if err := h.writeSet(ctx, key, set, expiry); err != nil {
 		return errValue(err)
+	} else if deleted > 0 {
+		Notify("s", "srem", key)
 	}
 	return protocol.Value{Kind: protocol.KindInteger, I: deleted}
 }
@@ -303,8 +310,14 @@ func (h *setHandler) spop(ctx context.Context, args []protocol.Value) protocol.V
 		if derr := h.kv.Delete(ctx, datastruct.SetKey(key)); derr != nil {
 			return errValue(derr)
 		}
+		if len(popped) > 0 {
+			Notify("s", "spop", key)
+			Notify("g", "del", key)
+		}
 	} else if werr := h.writeSet(ctx, key, set, expiry); werr != nil {
 		return errValue(werr)
+	} else if len(popped) > 0 {
+		Notify("s", "spop", key)
 	}
 	if !withCount {
 		if len(popped) == 0 {
@@ -412,5 +425,7 @@ func (h *setHandler) smove(ctx context.Context, args []protocol.Value) protocol.
 	if werr := h.writeSet(ctx, dst, dstSet, dstExpiry); werr != nil {
 		return errValue(werr)
 	}
+	Notify("s", "srem", src)
+	Notify("s", "sadd", dst)
 	return protocol.Value{Kind: protocol.KindInteger, I: 1}
 }

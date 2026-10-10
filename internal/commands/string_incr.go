@@ -97,6 +97,7 @@ func (s *stringHandler) incrBy(ctx context.Context, args []protocol.Value, delta
 	if err := s.kv.Set(ctx, datastruct.StringKey(key), datastruct.EncodeString([]byte(strconv.FormatInt(next, 10)), expiry)); err != nil {
 		return errValue(err)
 	}
+	Notify("$", "incrby", key)
 	return protocol.Value{Kind: protocol.KindInteger, I: next}
 }
 
@@ -135,5 +136,6 @@ func (s *stringHandler) incrbyfloat(ctx context.Context, args []protocol.Value) 
 	if err := s.kv.Set(ctx, datastruct.StringKey(key), datastruct.EncodeString([]byte(out), expiry)); err != nil {
 		return errValue(err)
 	}
+	Notify("$", "incrbyfloat", key)
 	return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte(out)}
 }

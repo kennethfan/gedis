@@ -60,8 +60,10 @@ func (p *Pebble) WriteBatch(ctx context.Context, ops []BatchOp) error {
 	for _, op := range ops {
 		if op.Delete {
 			p.trackDelete(op.Key)
+			p.callChangeHook(ctx, 'd', op.Key)
 		} else {
 			p.trackSet(op.Key, op.Value)
+			p.callChangeHook(ctx, 's', op.Key)
 		}
 	}
 	if err := p.evictIfNeeded(ctx); err != nil {

@@ -19,6 +19,8 @@ var hashExpireMeta = []acl.Meta{
 	{Name: "HPEXPIREAT", Category: "hash", Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "HTTL", Category: "hash", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "HPTTL", Category: "hash", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "HEXPIRETIME", Category: "hash", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "HPEXPIRETIME", Category: "hash", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "HPERSIST", Category: "hash", Keys: acl.KeySpec{First: 0, Last: 0}},
 }
 
@@ -40,6 +42,8 @@ func (h *hashHandler) registerHashExpire(r *network.Router) {
 	})
 	r.Register("HTTL", h.httl)
 	r.Register("HPTTL", h.hpttl)
+	r.Register("HEXPIRETIME", h.hexpiretime)
+	r.Register("HPEXPIRETIME", h.hpexpiretime)
 	r.Register("HPERSIST", h.hpersist)
 }
 
@@ -212,6 +216,7 @@ func (h *hashHandler) hexpire(ctx context.Context, args []protocol.Value, kind e
 			return errValue(err)
 		}
 	}
+	Notify("h", "hexpired", key)
 	return protocol.Value{Kind: protocol.KindArray, Elems: out}
 }
 
@@ -221,6 +226,55 @@ func (h *hashHandler) httl(ctx context.Context, args []protocol.Value) protocol.
 
 func (h *hashHandler) hpttl(ctx context.Context, args []protocol.Value) protocol.Value {
 	return h.hfieldttl(ctx, args, true)
+}
+
+func (h *hashHandler) hexpiretime(ctx context.Context, args []protocol.Value) protocol.Value {
+	return h.fieldExpireAt(ctx, args, false)
+}
+
+func (h *hashHandler) hpexpiretime(ctx context.Context, args []protocol.Value) protocol.Value {
+	return h.fieldExpireAt(ctx, args, true)
+}
+
+// fieldExpireAt 实现 HEXPIRETIME/HPEXPIRETIME：-2 无 field/key，-1 无过期，
+// 否则绝对时间戳（秒/毫秒，源自 sidecar unixnano）。
+func (h *hashHandler) fieldExpireAt(ctx context.Context, args []protocol.Value, millis bool) protocol.Value {
+	fields, errReply := httlFields(args)
+	if errReply != nil {
+		return *errReply
+	}
+	m, _, err := h.readHash(ctx, fields.key)
+	if err != nil {
+		if isNotFound(err) {
+			return httlMissing(len(fields.names))
+		}
+		return errValue(err)
+	}
+	sidecar := h.readFieldExp(ctx, fields.key)
+	now := time.Now().UnixNano()
+	out := make([]protocol.Value, 0, len(fields.names))
+	for _, f := range fields.names {
+		if _, exists := m[f]; !exists {
+			out = append(out, protocol.Value{Kind: protocol.KindInteger, I: -2})
+			continue
+		}
+		ts, ok := sidecar[f]
+		if !ok {
+			out = append(out, protocol.Value{Kind: protocol.KindInteger, I: -1})
+			continue
+		}
+		nano, perr := strconv.ParseInt(ts, 10, 64)
+		if perr != nil || now >= nano {
+			out = append(out, protocol.Value{Kind: protocol.KindInteger, I: -2})
+			continue
+		}
+		if millis {
+			out = append(out, protocol.Value{Kind: protocol.KindInteger, I: nano / int64(time.Millisecond)})
+		} else {
+			out = append(out, protocol.Value{Kind: protocol.KindInteger, I: nano / int64(time.Second)})
+		}
+	}
+	return protocol.Value{Kind: protocol.KindArray, Elems: out}
 }
 
 // hfieldttl 实现 HTTL/HPTTL：-2 无 field/key，-1 无过期，否则剩余额度。
@@ -349,6 +403,7 @@ func (h *hashHandler) hpersist(ctx context.Context, args []protocol.Value) proto
 		if err := h.writeFieldExp(ctx, fields.key, sidecar); err != nil {
 			return errValue(err)
 		}
+		Notify("h", "hpersist", fields.key)
 	}
 	return protocol.Value{Kind: protocol.KindArray, Elems: out}
 }

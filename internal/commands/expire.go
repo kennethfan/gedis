@@ -19,6 +19,8 @@ var expireMeta = []acl.Meta{
 	{Name: "PEXPIREAT", Category: "keyspace", Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "PERSIST", Category: "keyspace", Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "PTTL", Category: "keyspace", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "EXPIRETIME", Category: "keyspace", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "PEXPIRETIME", Category: "keyspace", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "OBJECT", Category: "keyspace", ReadOnly: true, Keys: acl.KeySpec{Custom: acl.SubKeyAt1}},
 }
 
@@ -40,6 +42,12 @@ func (s *stringHandler) registerExpire(r *network.Router) {
 	})
 	r.Register("PERSIST", s.persist)
 	r.Register("PTTL", s.pttl)
+	r.Register("EXPIRETIME", func(ctx context.Context, args []protocol.Value) protocol.Value {
+		return s.expireTime(ctx, args, false)
+	})
+	r.Register("PEXPIRETIME", func(ctx context.Context, args []protocol.Value) protocol.Value {
+		return s.expireTime(ctx, args, true)
+	})
 	r.Register("OBJECT", s.object)
 }
 
@@ -124,6 +132,7 @@ func (s *stringHandler) expire(ctx context.Context, args []protocol.Value, kind 
 
 	if exp <= time.Now().UnixNano() {
 		_ = s.kv.Delete(ctx, storeKey)
+		Notify("g", "del", key)
 		return protocol.Value{Kind: protocol.KindInteger, I: 1}
 	}
 
@@ -149,6 +158,7 @@ func (s *stringHandler) expire(ctx context.Context, args []protocol.Value, kind 
 	if err := s.kv.Set(ctx, storeKey, datastruct.Encode(e.Type, exp, e.Payload)); err != nil {
 		return errValue(err)
 	}
+	Notify("g", "expire", key)
 	return protocol.Value{Kind: protocol.KindInteger, I: 1}
 }
 
@@ -177,6 +187,7 @@ func (s *stringHandler) persist(ctx context.Context, args []protocol.Value) prot
 	if serr := s.kv.Set(ctx, storeKey, datastruct.Encode(e.Type, 0, e.Payload)); serr != nil {
 		return errValue(serr)
 	}
+	Notify("g", "persist", key)
 	return protocol.Value{Kind: protocol.KindInteger, I: 1}
 }
 
@@ -205,12 +216,87 @@ func (s *stringHandler) pttl(ctx context.Context, args []protocol.Value) protoco
 	return protocol.Value{Kind: protocol.KindInteger, I: ms}
 }
 
+// expireTime 实现 EXPIRETIME/PEXPIRETIME：回绝对 Unix 时间（秒/毫秒）；
+// miss -2、无过期 -1（对齐真机与 pttl 语义）。
+func (s *stringHandler) expireTime(ctx context.Context, args []protocol.Value, ms bool) protocol.Value {
+	name := "expiretime"
+	if ms {
+		name = "pexpiretime"
+	}
+	if len(args) != 1 {
+		return errValueStr("ERR wrong number of arguments for '" + name + "' command")
+	}
+	key, ok := argString(args[0])
+	if !ok {
+		return errValueStr("ERR invalid key")
+	}
+	e, err := s.getAny(ctx, key)
+	if err != nil {
+		if isNotFound(err) {
+			return protocol.Value{Kind: protocol.KindInteger, I: -2}
+		}
+		return errValue(err)
+	}
+	if e.Expiry == 0 {
+		return protocol.Value{Kind: protocol.KindInteger, I: -1}
+	}
+	if ms {
+		return protocol.Value{Kind: protocol.KindInteger, I: e.Expiry / int64(time.Millisecond)}
+	}
+	return protocol.Value{Kind: protocol.KindInteger, I: e.Expiry / int64(time.Second)}
+}
+
 func (s *stringHandler) object(ctx context.Context, args []protocol.Value) protocol.Value {
 	if len(args) != 2 {
 		return errValueStr("ERR wrong number of arguments for 'object' command")
 	}
 	sub, ok := argString(args[0])
-	if !ok || strings.ToUpper(sub) != "ENCODING" {
+	if !ok {
+		return errValueStr("ERR syntax error")
+	}
+	// REFCOUNT：无引用计数模型，恒 1（文档注明）。
+	// IDLETIME/FREQ：先读统计再走 getAny——getAny 会经 trackGet 刷新
+	// at/freq，先读保证统计值不被本次访问污染。
+	switch strings.ToUpper(sub) {
+	case "REFCOUNT", "IDLETIME", "FREQ":
+		key, ok := argString(args[1])
+		if !ok {
+			return errValueStr("ERR invalid key")
+		}
+		var idleSec uint64
+		var freq uint8
+		var haveStats bool
+		for _, prefix := range typePrefixes {
+			idle, f, hit := s.kv.ObjectStats(ctx, []byte(prefix+key))
+			if hit {
+				idleSec, freq, haveStats = idle, f, true
+				break
+			}
+		}
+		if _, err := s.getAny(ctx, key); err != nil {
+			if isNotFound(err) {
+				return protocol.Value{Kind: protocol.KindBulkString}
+			}
+			return errValue(err)
+		}
+		if strings.EqualFold(sub, "REFCOUNT") {
+			return protocol.Value{Kind: protocol.KindInteger, I: 1}
+		}
+		if strings.EqualFold(sub, "IDLETIME") {
+			var v int64
+			if haveStats {
+				v = int64(idleSec)
+			}
+			return protocol.Value{Kind: protocol.KindInteger, I: v}
+		}
+		var v int64
+		if haveStats {
+			v = int64(freq)
+		}
+		return protocol.Value{Kind: protocol.KindInteger, I: v}
+	case "ENCODING":
+		break
+	default:
 		return errValueStr("ERR syntax error")
 	}
 	key, ok := argString(args[1])
@@ -224,35 +310,42 @@ func (s *stringHandler) object(ctx context.Context, args []protocol.Value) proto
 		}
 		return errValue(err)
 	}
-	if e.Type == datastruct.TypeHash {
-		if len(e.Payload) > 0 && e.Payload[0] == datastruct.EncodingHashtable {
-			return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte("hashtable")}
-		}
-		return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte("listpack")}
-	}
-	if e.Type == datastruct.TypeList {
-		if len(e.Payload) > 0 && e.Payload[0] == datastruct.ListEncodingQuicklist {
-			return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte("quicklist")}
-		}
-		return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte("ziplist")}
-	}
-	if e.Type == datastruct.TypeSet {
-		if len(e.Payload) > 0 && e.Payload[0] == datastruct.EncodingIntset {
-			return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte("intset")}
-		}
-		return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte("hashtable")}
-	}
-	if e.Type == datastruct.TypeZSet {
-		if len(e.Payload) > 0 && e.Payload[0] == datastruct.ZSetEncodingSkiplist {
-			return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte("skiplist")}
-		}
-		return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte("listpack")}
-	}
-	if e.Type != datastruct.TypeString {
+	enc, ok := objectEncodingOf(e)
+	if !ok {
 		return errValueStr("ERR OBJECT ENCODING not supported for this type")
 	}
-	if len(e.Payload) <= 44 {
-		return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte("embstr")}
+	return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte(enc)}
+}
+
+// objectEncodingOf 返回 entry 的编码名；未覆盖类型回 ok=false。
+func objectEncodingOf(e datastruct.Entry) (string, bool) {
+	switch e.Type {
+	case datastruct.TypeHash:
+		if len(e.Payload) > 0 && e.Payload[0] == datastruct.EncodingHashtable {
+			return "hashtable", true
+		}
+		return "listpack", true
+	case datastruct.TypeList:
+		if len(e.Payload) > 0 && e.Payload[0] == datastruct.ListEncodingQuicklist {
+			return "quicklist", true
+		}
+		return "ziplist", true
+	case datastruct.TypeSet:
+		if len(e.Payload) > 0 && e.Payload[0] == datastruct.EncodingIntset {
+			return "intset", true
+		}
+		return "hashtable", true
+	case datastruct.TypeZSet:
+		if len(e.Payload) > 0 && e.Payload[0] == datastruct.ZSetEncodingSkiplist {
+			return "skiplist", true
+		}
+		return "listpack", true
+	case datastruct.TypeString:
+		if len(e.Payload) <= 44 {
+			return "embstr", true
+		}
+		return "raw", true
+	default:
+		return "", false
 	}
-	return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte("raw")}
 }

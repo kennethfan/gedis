@@ -64,6 +64,7 @@ func (h *hashHandler) hincrby(ctx context.Context, args []protocol.Value) protoc
 	if err := h.writeHash(ctx, key, m, expiry); err != nil {
 		return errValue(err)
 	}
+	Notify("h", "hincrby", key)
 	return protocol.Value{Kind: protocol.KindInteger, I: next}
 }
 
@@ -106,5 +107,6 @@ func (h *hashHandler) hincrbyfloat(ctx context.Context, args []protocol.Value) p
 	if err := h.writeHash(ctx, key, m, expiry); err != nil {
 		return errValue(err)
 	}
+	Notify("h", "hincrbyfloat", key)
 	return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte(out)}
 }

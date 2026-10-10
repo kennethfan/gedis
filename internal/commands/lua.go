@@ -68,6 +68,10 @@ type luaRun struct {
 	cancel context.CancelFunc
 	dirty  bool
 	killed bool
+	// fnRun 表 FCALL 执行（错误行号走 user_function traceback 语义）；
+	// readonly 为 no-writes/FCALL_RO 拦截写命令（luaCall 分发前判）。
+	fnRun    bool
+	readonly bool
 }
 
 // track 登记在飞脚本；untrack 注销（run defer）。
@@ -105,6 +109,19 @@ func (r *LuaRegistry) kill() (killed, unkillable bool) {
 		rr.cancel()
 	}
 	return true, false
+}
+
+// killResult 把 kill() 三态转协议回复（SCRIPT KILL 与 FUNCTION KILL 共用）。
+func (r *LuaRegistry) killResult() protocol.Value {
+	killed, unkillable := r.kill()
+	switch {
+	case unkillable:
+		return errValueStr("UNKILLABLE Sorry the script already executed write commands against the dataset. You can either wait the script termination or kill the server in a hard way using the SHUTDOWN NOSAVE command.")
+	case killed:
+		return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
+	default:
+		return errValueStr("NOTBUSY No scripts in execution right now.")
+	}
 }
 
 // markDirty 标记某次执行已分发过写命令（分发前拒绝的不调此函数）。
@@ -276,17 +293,9 @@ func (e *luaExec) handleScript(_ context.Context, args []protocol.Value) protoco
 		if len(args) != 1 {
 			return errValueStr("ERR wrong number of arguments for 'script|kill' command")
 		}
-		killed, unkillable := e.reg.kill()
-		switch {
-		case unkillable:
-			return errValueStr("UNKILLABLE Sorry the script already executed write commands against the dataset. You can either wait the script termination or kill the server in a hard way using the SHUTDOWN NOSAVE command.")
-		case killed:
-			return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
-		default:
-			return errValueStr("NOTBUSY No scripts in execution right now.")
-		}
+		return e.reg.killResult()
 	default:
-		return errValueStr(fmt.Sprintf("ERR unknown subcommand '%s'. Try SCRIPT HELP.", sub))
+		return errValueStr(fmt.Sprintf("ERR unknown subcommand '%s'. Try SCRIPT HELP.", sanitizeSub(sub)))
 	}
 }
 
@@ -317,7 +326,7 @@ func (e *luaExec) run(ctx context.Context, body string, keys, argv []string) pro
 
 	fn, err := L.Load(strings.NewReader(body), "user_script")
 	if err != nil {
-		return errValueStr("ERR Error compiling script (new function): " + compileDetail(body, err))
+		return errValueStr("ERR Error compiling script (new function): " + compileDetail(body, err, "user_script"))
 	}
 	e.reg.track(rr)
 	defer e.reg.untrack(rr)
@@ -329,8 +338,7 @@ func (e *luaExec) run(ctx context.Context, body string, keys, argv []string) pro
 		if cemsg, ok := cjsonErrFrom(err); ok {
 			return errValueStr(fmt.Sprintf("ERR %s script: %s, on @user_script:1.", cemsg, sha))
 		}
-		msg, _, _ := strings.Cut(err.Error(), "\n")
-		return scriptError(msg, sha)
+		return scriptError(apiErrMessage(err), sha)
 	}
 	ret := L.Get(-1)
 	L.Pop(1)
@@ -354,17 +362,41 @@ func cjsonErrFrom(err error) (string, bool) {
 	return "", false
 }
 
+// apiErrMessage 取错误的"消息本体"：ApiError 走 Object.String()（剥
+// gopher-lua 追加的 "\n"+StackTrace，真机保留消息全文含内部换行，probe16）；
+// 非 ApiError 原样返回。
+func apiErrMessage(err error) string {
+	var apiErr *lua.ApiError
+	if errors.As(err, &apiErr) {
+		return apiErr.Object.String()
+	}
+	return err.Error()
+}
+
 // scriptError 包运行时错误外层：自带 ERR /WRONGTYPE 前缀的不再补。
+// 行号从消息首行提取 user_script:N（真机 probe18：line2 → on @user_script:2.）；
+// 提不到才回退 1。
 func scriptError(msg, sha string) protocol.Value {
+	line := 1
+	if first, _, _ := strings.Cut(msg, "\n"); first != "" {
+		if m := userScriptLineRe.FindStringSubmatch(first); m != nil {
+			line, _ = strconv.Atoi(m[1])
+		}
+	}
 	if !strings.HasPrefix(msg, "ERR ") && !strings.HasPrefix(msg, "WRONGTYPE") {
 		msg = "ERR " + msg
 	}
-	return errValueStr(fmt.Sprintf("%s script: %s, on @user_script:1.", msg, sha))
+	return errValueStr(fmt.Sprintf("%s script: %s, on @user_script:%d.", msg, sha, line))
 }
 
-// compileDetail 把 gopher-lua 编译错误重排为 `user_script:行: 信息`。四类可精确
+// userScriptLineRe 匹配首行位置前缀 user_script:N:。
+var userScriptLineRe = regexp.MustCompile(`^user_script:(\d+): `)
+
+// compileDetail 把 gopher-lua 编译错误重排为 `<chunk>:行: 信息`。四类可精确
 // 映射为 Lua 5.1 原生措辞（7.2.6 探针逐字对齐），其余保留 gopher 原文。
-func compileDetail(body string, err error) string {
+// chunk=用户可见源块名（user_script / user_function）；syntax-error→Lua 措辞的
+// unexpected symbol 映射仅对 user_function 生效（EVAL 路径 lua_test 钉 gopher 原文）。
+func compileDetail(body string, err error, chunk string) string {
 	cause := err
 	var apiErr *lua.ApiError
 	if errors.As(err, &apiErr) && apiErr.Cause != nil {
@@ -372,7 +404,7 @@ func compileDetail(body string, err error) string {
 	}
 	if cerr, ok := cause.(*lua.CompileError); ok {
 		if m := gotoLabelRe.FindStringSubmatch(cerr.Error()); m != nil {
-			return fmt.Sprintf("user_script:%s: '=' expected near '%s'", m[2], m[1])
+			return fmt.Sprintf("%s:%s: '=' expected near '%s'", chunk, m[2], m[1])
 		}
 	}
 	var perr *parse.Error
@@ -381,16 +413,16 @@ func compileDetail(body string, err error) string {
 		if line == parse.EOF {
 			line = strings.Count(body, "\n") + 1
 		}
-		if mapped, ok := mapParseMessage(body, line, perr); ok {
+		if mapped, ok := mapParseMessage(body, line, perr, chunk); ok {
 			return mapped
 		}
-		return fmt.Sprintf("user_script:%d: %s", line, perr.Message)
+		return fmt.Sprintf("%s:%d: %s", chunk, line, perr.Message)
 	}
 	msg := err.Error()
-	if i := strings.Index(msg, "user_script"); i >= 0 {
+	if i := strings.Index(msg, chunk); i >= 0 {
 		return strings.TrimRight(msg[i:], "\n")
 	}
-	return "user_script:1: " + msg
+	return chunk + ":1: " + msg
 }
 
 // gotoLabelRe 提取 gopher `no visible label 'X' for <goto> at line N` 的标签与行号。
@@ -403,23 +435,34 @@ var gotoLabelRe = regexp.MustCompile(`no visible label '([^']*)' for <goto> at l
 //   - 未闭合串：行尾/EOF→`near '<eof>'`；跨行→行号回退到起始引号行，
 //     near 为原文照抄字面量套一层引号（`'abc`→`”abc'`）。
 //   - 未闭合长注释：行号为正文末行，`unfinished long comment near '<eof>'`。
-func mapParseMessage(body string, line int, perr *parse.Error) (string, bool) {
+//   - syntax error（仅 user_function）：`unexpected symbol near '<tok>'`，
+//     EOF 时 tok 强制 `<eof>`（EVAL 路径仍回退 gopher 原文 `syntax error`）。
+func mapParseMessage(body string, line int, perr *parse.Error, chunk string) (string, bool) {
 	switch perr.Message {
 	case "illegal hexadecimal number":
-		return fmt.Sprintf("user_script:%d: malformed number near '%s'",
-			line, hexLiteral(body, line, perr.Pos.Column)), true
+		return fmt.Sprintf("%s:%d: malformed number near '%s'",
+			chunk, line, hexLiteral(body, line, perr.Pos.Column)), true
 	case "unterminated string":
 		if perr.Pos.Line == parse.EOF {
-			return fmt.Sprintf("user_script:%d: unfinished string near '<eof>'", line), true
+			return fmt.Sprintf("%s:%d: unfinished string near '<eof>'", chunk, line), true
 		}
 		open := line - 1
 		if q, ok := stringQuote(body, open, perr.Token); ok {
-			return fmt.Sprintf("user_script:%d: unfinished string near '%s'",
-				open, q+perr.Token), true
+			return fmt.Sprintf("%s:%d: unfinished string near '%s'",
+				chunk, open, q+perr.Token), true
 		}
 		return "", false
 	case "invalid multiline comment":
-		return fmt.Sprintf("user_script:%d: unfinished long comment near '<eof>'", line), true
+		return fmt.Sprintf("%s:%d: unfinished long comment near '<eof>'", chunk, line), true
+	case "syntax error":
+		if chunk != "user_function" {
+			return "", false
+		}
+		tok := perr.Token
+		if perr.Pos.Line == parse.EOF {
+			tok = "<eof>"
+		}
+		return fmt.Sprintf("%s:%d: unexpected symbol near '%s'", chunk, line, tok), true
 	}
 	return "", false
 }
@@ -500,6 +543,7 @@ func (e *luaExec) registerRedisLib(L *lua.LState, ctx context.Context, rr *luaRu
 		"log":          luaLog,
 		"error_reply":  luaErrorReply,
 		"status_reply": luaStatusReply,
+		"setresp":      luaSetresp,
 	})
 	for k, v := range map[string]int{
 		"LOG_DEBUG": 0, "LOG_VERBOSE": 1, "LOG_NOTICE": 2, "LOG_WARNING": 3,
@@ -666,8 +710,12 @@ func luaLog(L *lua.LState) int {
 
 func luaErrorReply(L *lua.LState) int {
 	s := L.CheckString(1)
+	// 真机 7.2.6：仅当消息不含空格时前缀 "ERR "（'bad'→'ERR bad'，'foo bar' 原样，'ERR'→'ERR ERR'）。
+	if !strings.Contains(s, " ") {
+		s = "ERR " + s
+	}
 	t := L.NewTable()
-	t.RawSetString("err", lua.LString("ERR "+s))
+	t.RawSetString("err", lua.LString(s))
 	L.Push(t)
 	return 1
 }
@@ -678,6 +726,10 @@ func luaStatusReply(L *lua.LState) int {
 	t.RawSetString("ok", lua.LString(s))
 	L.Push(t)
 	return 1
+}
+
+func luaSetresp(L *lua.LState) int {
+	return 0
 }
 
 // luaWriteCmds 复用写命令集合做 KILL 脏标记（包级单例，WriteCommandSet 每次新建 map）。
@@ -691,6 +743,7 @@ var luaNoScriptCmds = map[string]struct{}{
 	"MULTI": {}, "EXEC": {}, "DISCARD": {}, "WATCH": {}, "UNWATCH": {},
 	"EVAL": {}, "EVALSHA": {}, "SCRIPT": {},
 	"CONFIG": {}, "DEBUG": {}, "SHUTDOWN": {}, "CLIENT": {}, "ACL": {},
+	"FCALL": {}, "FCALL_RO": {}, "FUNCTION": {},
 }
 
 // hasBlockOption 识别 XREAD 的 BLOCK 选项：STREAMS 之前的 BLOCK（大小写不敏感）
@@ -797,6 +850,9 @@ func (e *luaExec) luaCall(ctx context.Context, pcall bool, rr *luaRun) lua.LGFun
 		if upName == "XREAD" && hasBlockOption(elems) {
 			return e.raiseOrTable(L, pcall, "ERR "+string(nameStr)+" command is not allowed with BLOCK option from scripts")
 		}
+		if rr.fnRun && rr.readonly && luaWriteCmds[upName] {
+			return e.raiseOrTable(L, pcall, "Write commands are not allowed from read-only scripts.")
+		}
 		h, ok := e.router.Handler(string(nameStr))
 		if !ok {
 			return e.raiseOrTable(L, pcall, "ERR Unknown Redis command called from script")
@@ -842,7 +898,7 @@ func luaToResp(v lua.LValue) (protocol.Value, error) {
 		return protocol.BulkOf(string(t)), nil
 	case *lua.LTable:
 		if s, ok := t.RawGetString("err").(lua.LString); ok {
-			return protocol.Value{Kind: protocol.KindError, S: string(s)}, nil
+			return protocol.Value{Kind: protocol.KindError, S: sanitizeErrText(string(s))}, nil
 		}
 		if s, ok := t.RawGetString("ok").(lua.LString); ok {
 			return protocol.Value{Kind: protocol.KindSimpleString, S: string(s)}, nil

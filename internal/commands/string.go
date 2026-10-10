@@ -21,6 +21,9 @@ type KV interface {
 	Delete(ctx context.Context, key []byte) error
 	Scan(ctx context.Context, prefix []byte) ([][]byte, error)
 	WriteBatch(ctx context.Context, ops []storage.BatchOp) error
+	// ObjectStats 读取 rawKey 的空闲秒数与 LFU 计数，不刷新访问时钟；
+	// 未跟踪的 key 返回 ok=false。
+	ObjectStats(ctx context.Context, rawKey []byte) (idleSec uint64, freq uint8, ok bool)
 }
 
 // RegisterStrings 注册全部 string 与通用 key 命令。
@@ -29,6 +32,11 @@ var stringMeta = []acl.Meta{
 	{Name: "GET", Category: "string", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "GETDEL", Category: "string", Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "GETEX", Category: "string", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "GETSET", Category: "string", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "SETEX", Category: "string", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "PSETEX", Category: "string", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "SETNX", Category: "string", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "TOUCH", Category: "keyspace", ReadOnly: true, Keys: acl.KeySpec{First: -1}},
 	{Name: "DEL", Category: "keyspace", Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "UNLINK", Category: "keyspace", Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "TTL", Category: "keyspace", ReadOnly: true, Keys: acl.KeySpec{First: 0, Last: 0}},
@@ -43,6 +51,11 @@ func RegisterStrings(r *network.Router, kv KV) {
 	r.Register("GET", h.get)
 	r.Register("GETDEL", h.getdel)
 	r.Register("GETEX", h.getex)
+	r.Register("GETSET", h.getset)
+	r.Register("SETEX", h.setex)
+	r.Register("PSETEX", h.psetex)
+	r.Register("SETNX", h.setnx)
+	r.Register("TOUCH", h.touch)
 	r.Register("DEL", h.del)
 	r.Register("UNLINK", h.del)
 	r.Register("TTL", h.ttl)
@@ -51,6 +64,7 @@ func RegisterStrings(r *network.Router, kv KV) {
 	h.registerExtra(r)
 	h.registerKeyspace(r)
 	h.registerExpire(r)
+	h.registerLCS(r)
 }
 
 type stringHandler struct {
@@ -181,6 +195,7 @@ func (s *stringHandler) set(ctx context.Context, args []protocol.Value) protocol
 	if err := s.kv.Set(ctx, datastruct.StringKey(key), datastruct.EncodeString([]byte(value), expiry)); err != nil {
 		return errValue(err)
 	}
+	Notify("$", "set", key)
 	if opt.get {
 		if !exists {
 			return protocol.Value{Kind: protocol.KindBulkString}
@@ -208,6 +223,114 @@ func (s *stringHandler) get(ctx context.Context, args []protocol.Value) protocol
 	return protocol.Value{Kind: protocol.KindBulkString, Bulk: e.Payload}
 }
 
+func (s *stringHandler) getset(ctx context.Context, args []protocol.Value) protocol.Value {
+	if len(args) != 2 {
+		return errValueStr("ERR wrong number of arguments for 'getset' command")
+	}
+	key, ok := argString(args[0])
+	if !ok {
+		return errValueStr("ERR invalid key")
+	}
+	value, ok := argString(args[1])
+	if !ok {
+		return errValueStr("ERR invalid value")
+	}
+	old, err := s.getEntry(ctx, key)
+	exists := err == nil
+	if err != nil && !isNotFound(err) {
+		return errValue(err)
+	}
+	if err := s.kv.Set(ctx, datastruct.StringKey(key), datastruct.EncodeString([]byte(value), 0)); err != nil {
+		return errValue(err)
+	}
+	Notify("$", "set", key)
+	if !exists {
+		return protocol.Value{Kind: protocol.KindBulkString}
+	}
+	return protocol.Value{Kind: protocol.KindBulkString, Bulk: old.Payload}
+}
+
+func (s *stringHandler) setex(ctx context.Context, args []protocol.Value) protocol.Value {
+	return s.setWithTTL(ctx, args, "setex", time.Second)
+}
+
+func (s *stringHandler) psetex(ctx context.Context, args []protocol.Value) protocol.Value {
+	return s.setWithTTL(ctx, args, "psetex", time.Millisecond)
+}
+
+func (s *stringHandler) setWithTTL(ctx context.Context, args []protocol.Value, name string, unit time.Duration) protocol.Value {
+	if len(args) != 3 {
+		return errValueStr("ERR wrong number of arguments for '" + name + "' command")
+	}
+	key, ok := argString(args[0])
+	if !ok {
+		return errValueStr("ERR invalid key")
+	}
+	ttlStr, ok := argString(args[1])
+	if !ok {
+		return errValueStr("ERR value is not an integer or out of range")
+	}
+	value, ok := argString(args[2])
+	if !ok {
+		return errValueStr("ERR invalid value")
+	}
+	n, err := strconv.ParseInt(ttlStr, 10, 64)
+	if err != nil {
+		return errValueStr("ERR value is not an integer or out of range")
+	}
+	if n <= 0 {
+		return errValueStr("ERR invalid expire time in '" + name + "' command")
+	}
+	expiry := time.Now().Add(time.Duration(n) * unit).UnixNano()
+	if err := s.kv.Set(ctx, datastruct.StringKey(key), datastruct.EncodeString([]byte(value), expiry)); err != nil {
+		return errValue(err)
+	}
+	Notify("$", "set", key)
+	Notify("g", "expire", key)
+	return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
+}
+
+func (s *stringHandler) setnx(ctx context.Context, args []protocol.Value) protocol.Value {
+	if len(args) != 2 {
+		return errValueStr("ERR wrong number of arguments for 'setnx' command")
+	}
+	key, ok := argString(args[0])
+	if !ok {
+		return errValueStr("ERR invalid key")
+	}
+	value, ok := argString(args[1])
+	if !ok {
+		return errValueStr("ERR invalid value")
+	}
+	if _, err := s.getAny(ctx, key); err == nil {
+		return protocol.Value{Kind: protocol.KindInteger, I: 0}
+	} else if !isNotFound(err) {
+		return errValue(err)
+	}
+	if err := s.kv.Set(ctx, datastruct.StringKey(key), datastruct.EncodeString([]byte(value), 0)); err != nil {
+		return errValue(err)
+	}
+	Notify("$", "set", key)
+	return protocol.Value{Kind: protocol.KindInteger, I: 1}
+}
+
+func (s *stringHandler) touch(ctx context.Context, args []protocol.Value) protocol.Value {
+	if len(args) < 1 {
+		return errValueStr("ERR wrong number of arguments for 'touch' command")
+	}
+	var n int64
+	for _, a := range args {
+		key, ok := argString(a)
+		if !ok {
+			continue
+		}
+		if _, _, err := lookupRaw(ctx, s.kv, key); err == nil {
+			n++
+		}
+	}
+	return protocol.Value{Kind: protocol.KindInteger, I: n}
+}
+
 func (s *stringHandler) getdel(ctx context.Context, args []protocol.Value) protocol.Value {
 	if len(args) != 1 {
 		return errValueStr("ERR wrong number of arguments for 'getdel' command")
@@ -224,6 +347,7 @@ func (s *stringHandler) getdel(ctx context.Context, args []protocol.Value) proto
 		return errValue(err)
 	}
 	_ = s.kv.Delete(ctx, datastruct.StringKey(key))
+	Notify("g", "del", key)
 	return protocol.Value{Kind: protocol.KindBulkString, Bulk: e.Payload}
 }
 
@@ -291,6 +415,7 @@ func (s *stringHandler) del(ctx context.Context, args []protocol.Value) protocol
 		if e.Type == datastruct.TypeHash {
 			_ = s.kv.Delete(ctx, datastruct.HashExpKey(key))
 		}
+		Notify("g", "del", key)
 		n++
 	}
 	return protocol.Value{Kind: protocol.KindInteger, I: n}
