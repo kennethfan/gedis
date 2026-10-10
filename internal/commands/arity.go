@@ -119,6 +119,7 @@ func CommandArity() map[string]int {
 		"MSETNX":               -3,
 		"MOVE":                 3,
 		"MULTI":                1,
+		"MONITOR":              1,
 		"OBJECT":               -2,
 		"PERSIST":              2,
 		"PEXPIRE":              -3,

@@ -42,6 +42,8 @@ func RegisterServer(r *network.Router, kv KV, stats *network.Stats, hub *replica
 	r.Register("BGSAVE", h.unsupportedPersistence)
 	r.Register("BGREWRITEAOF", h.unsupportedPersistence)
 	r.Register("SAVE", h.unsupportedPersistence)
+	r.Register("MONITOR", h.monitor)
+	InstallMonitorHook(r)
 	return h
 }
 
@@ -60,6 +62,7 @@ var serverMeta = []acl.Meta{
 	{Name: "BGSAVE", Category: "admin", Keys: acl.KeySpec{First: -1}},
 	{Name: "BGREWRITEAOF", Category: "admin", Keys: acl.KeySpec{First: -1}},
 	{Name: "SAVE", Category: "admin", Keys: acl.KeySpec{First: -1}},
+	{Name: "MONITOR", Category: "admin", Keys: acl.KeySpec{First: -1}},
 }
 
 type serverHandler struct {
@@ -68,6 +71,13 @@ type serverHandler struct {
 	hub   *replication.Hub
 	conns *ConnRegistry
 	deps  ServerDeps
+}
+
+func (h *serverHandler) monitor(ctx context.Context, args []protocol.Value) protocol.Value {
+	if len(args) != 0 {
+		return errValueStr("ERR wrong number of arguments for 'monitor' command")
+	}
+	return startMonitor(ctx)
 }
 
 // dbsize 统计未过期 key 数（读语义：跳过已过期条目，无副作用）。
@@ -272,6 +282,11 @@ func (h *serverHandler) client(ctx context.Context, args []protocol.Value) proto
 		return protocol.Value{Kind: protocol.KindInteger, I: h.conns.IDOf(conn)}
 	case "KILL":
 		return errValueStr("ERR CLIENT KILL not supported (no connection closer wired)")
+	case "MONITOR":
+		if len(args) != 1 {
+			return errValueStr("ERR wrong number of arguments for 'client|monitor' command")
+		}
+		return startMonitor(ctx)
 	default:
 		return errValueStr(fmt.Sprintf("ERR unknown subcommand '%s' for 'client' command", sub))
 	}

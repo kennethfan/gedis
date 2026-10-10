@@ -102,6 +102,7 @@ func (s *Server) handle(conn net.Conn) {
 		s.mu.Lock()
 		delete(s.conns, conn)
 		ForgetClose(conn)
+		ForgetWriteLock(conn)
 		onClose := s.onConnClose
 		s.mu.Unlock()
 		if onClose != nil {
@@ -124,7 +125,7 @@ func (s *Server) handle(conn net.Conn) {
 			}
 		}
 		reply := s.router.Dispatch(ctx, cmd)
-		if _, err := conn.Write(reply.Append(nil)); err != nil {
+		if err := LockedWrite(conn, reply.Append(nil)); err != nil {
 			return
 		}
 		if CloseRequested(conn) {
