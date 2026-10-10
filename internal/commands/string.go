@@ -21,6 +21,9 @@ type KV interface {
 	Delete(ctx context.Context, key []byte) error
 	Scan(ctx context.Context, prefix []byte) ([][]byte, error)
 	WriteBatch(ctx context.Context, ops []storage.BatchOp) error
+	// ObjectStats 读取 rawKey 的空闲秒数与 LFU 计数，不刷新访问时钟；
+	// 未跟踪的 key 返回 ok=false。
+	ObjectStats(ctx context.Context, rawKey []byte) (idleSec uint64, freq uint8, ok bool)
 }
 
 // RegisterStrings 注册全部 string 与通用 key 命令。

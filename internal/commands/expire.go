@@ -251,13 +251,24 @@ func (s *stringHandler) object(ctx context.Context, args []protocol.Value) proto
 	if !ok {
 		return errValueStr("ERR syntax error")
 	}
-	// REFCOUNT/IDLETIME/FREQ：本引擎无引用计数与访问时钟跟踪，
-	// 回恒定占位（1/0/0）并文档注明；LFU 真值等 Phase 9 补齐。
+	// REFCOUNT：无引用计数模型，恒 1（文档注明）。
+	// IDLETIME/FREQ：先读统计再走 getAny——getAny 会经 trackGet 刷新
+	// at/freq，先读保证统计值不被本次访问污染。
 	switch strings.ToUpper(sub) {
 	case "REFCOUNT", "IDLETIME", "FREQ":
 		key, ok := argString(args[1])
 		if !ok {
 			return errValueStr("ERR invalid key")
+		}
+		var idleSec uint64
+		var freq uint8
+		var haveStats bool
+		for _, prefix := range typePrefixes {
+			idle, f, hit := s.kv.ObjectStats(ctx, []byte(prefix+key))
+			if hit {
+				idleSec, freq, haveStats = idle, f, true
+				break
+			}
 		}
 		if _, err := s.getAny(ctx, key); err != nil {
 			if isNotFound(err) {
@@ -268,7 +279,18 @@ func (s *stringHandler) object(ctx context.Context, args []protocol.Value) proto
 		if strings.EqualFold(sub, "REFCOUNT") {
 			return protocol.Value{Kind: protocol.KindInteger, I: 1}
 		}
-		return protocol.Value{Kind: protocol.KindInteger, I: 0}
+		if strings.EqualFold(sub, "IDLETIME") {
+			var v int64
+			if haveStats {
+				v = int64(idleSec)
+			}
+			return protocol.Value{Kind: protocol.KindInteger, I: v}
+		}
+		var v int64
+		if haveStats {
+			v = int64(freq)
+		}
+		return protocol.Value{Kind: protocol.KindInteger, I: v}
 	case "ENCODING":
 		break
 	default:

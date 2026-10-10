@@ -236,14 +236,15 @@ func Test_Server_when_Debug(t *testing.T) {
 }
 
 // Given: 库中有 string key
-// When: OBJECT REFCOUNT/IDLETIME/FREQ
-// Then: 回 1/0/0（未跟踪的诚实占位）；缺 key 回空；非法子命令报错
+// When: OBJECT FREQ/REFCOUNT/IDLETIME
+// Then: FREQ=1（SET 初始化，先断言以免被后续 OBJECT 的 getAny 触达 +1）；
+// REFCOUNT 恒 1；IDLETIME=0（at 刚刷新）；缺 key 回空；非法子命令报错
 func Test_Server_when_ObjectExtended(t *testing.T) {
 	r, _, _, _, _ := openServerSetup(t)
 	dispatch(r, "SET", "k", "v")
+	require.Equal(t, protocol.Value{Kind: protocol.KindInteger, I: 1}, dispatch(r, "OBJECT", "FREQ", "k"))
 	require.Equal(t, protocol.Value{Kind: protocol.KindInteger, I: 1}, dispatch(r, "OBJECT", "REFCOUNT", "k"))
 	require.Equal(t, protocol.Value{Kind: protocol.KindInteger, I: 0}, dispatch(r, "OBJECT", "IDLETIME", "k"))
-	require.Equal(t, protocol.Value{Kind: protocol.KindInteger, I: 0}, dispatch(r, "OBJECT", "FREQ", "k"))
 	require.Equal(t, protocol.Value{Kind: protocol.KindBulkString}, dispatch(r, "OBJECT", "REFCOUNT", "missing"))
 	require.Equal(t, protocol.KindError, dispatch(r, "OBJECT", "BOGUS", "k").Kind)
 	require.Equal(t, protocol.BulkOf("embstr"), dispatch(r, "OBJECT", "ENCODING", "k"))
