@@ -3,8 +3,9 @@
 //     冲突检查 → 持久化 kv(fn:<库名>=源码)；注册期错误包
 //     `ERR Error registering functions: ERR <首行>`，编译错
 //     `ERR Error compiling function: <compileDetail>`。
-//   - FUNCTION LIST/STATS/DELETE/FLUSH/HELP；KILL/DUMP/RESTORE 属二批未实现
-//     （走 unknown subcommand，HELP 文案仍含）。
+//   - FUNCTION LIST/STATS/DELETE/FLUSH/HELP；KILL/DUMP/RESTORE 为二批（7.2.6
+//     探针对齐：KILL 复用 fnReg kill 三态；DUMP 自定帧格式 GDISFN01，文档注明
+//     跨引擎不可互恢复；RESTORE 两阶段 FLUSH/APPEND/REPLACE）。
 //   - FCALL/FCALL_RO：lower 索引查函数 → numkeys 解析 → RO flag 检查 → 每次
 //     重载库代码收集 callback 后 PCall(2,1)；错误外层
 //     `<msg> script: <fn>, on @user_function:<line>.`（行号取 traceback 首个
@@ -14,8 +15,10 @@ package commands
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -53,6 +56,7 @@ func RegisterFunctions(r *network.Router, kv KV, timeout time.Duration) {
 	h := &fnHandler{
 		store: &functionStore{kv: kv, libs: map[string]*fnLibrary{}, fns: map[string]fnRef{}},
 		exec:  &luaExec{router: r, reg: &LuaRegistry{scripts: map[string]string{}}, timeout: timeout},
+		runs:  map[*fnRunInfo]struct{}{},
 	}
 	r.Register("FUNCTION", h.handleFunction)
 	r.Register("FCALL", h.handleFcall(false))
@@ -106,6 +110,17 @@ type functionStore struct {
 type fnHandler struct {
 	store *functionStore
 	exec  *luaExec
+	// runs 在飞 FCALL 追踪（FUNCTION STATS running_script 与 KILL 共用语义；
+	// 真机单执行，gedis 并发取最早开始者展示）。
+	runMu sync.Mutex
+	runs  map[*fnRunInfo]struct{}
+}
+
+// fnRunInfo 一次在飞函数执行的 STATS 句柄。
+type fnRunInfo struct {
+	name    string
+	command []string
+	start   time.Time
 }
 
 // ---------------- 注册器（redis.register_function） ----------------
@@ -516,6 +531,18 @@ func (h *fnHandler) handleFunction(ctx context.Context, args []protocol.Value) p
 		return h.stats()
 	case "FLUSH":
 		return h.flush(ctx, args)
+	case "KILL":
+		if len(args) != 1 {
+			return wrongArgs("function|kill")
+		}
+		return h.exec.reg.killResult()
+	case "DUMP":
+		if len(args) != 1 {
+			return wrongArgs("function|dump")
+		}
+		return h.dump()
+	case "RESTORE":
+		return h.restoreFn(ctx, args)
 	case "HELP":
 		if len(args) != 1 {
 			return wrongArgs("function|help")
@@ -551,6 +578,24 @@ func (h *fnHandler) deleteLibrary(ctx context.Context, v protocol.Value) protoco
 	return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
 }
 
+// clearLocked 清空内存注册表（调用方持写锁）。
+func (fs *functionStore) clearLocked() {
+	fs.libs = map[string]*fnLibrary{}
+	fs.fns = map[string]fnRef{}
+}
+
+// sweepKV 清除 kv 中全部 fn: 键（FLUSH/RESTORE-FLUSH 共用）。
+func (fs *functionStore) sweepKV(ctx context.Context) {
+	if fs.kv == nil {
+		return
+	}
+	if keys, err := fs.kv.Scan(ctx, []byte(fnKeyPrefix)); err == nil {
+		for _, k := range keys {
+			_ = fs.kv.Delete(ctx, k)
+		}
+	}
+}
+
 // flush FUNCTION FLUSH [SYNC|ASYNC]：清空全部库。
 func (h *fnHandler) flush(ctx context.Context, args []protocol.Value) protocol.Value {
 	if len(args) > 2 {
@@ -563,15 +608,158 @@ func (h *fnHandler) flush(ctx context.Context, args []protocol.Value) protocol.V
 		}
 	}
 	h.store.mu.Lock()
-	h.store.libs = map[string]*fnLibrary{}
-	h.store.fns = map[string]fnRef{}
+	h.store.clearLocked()
 	h.store.mu.Unlock()
-	if h.store.kv != nil {
-		if keys, err := h.store.kv.Scan(ctx, []byte(fnKeyPrefix)); err == nil {
-			for _, k := range keys {
-				_ = h.store.kv.Delete(ctx, k)
+	h.store.sweepKV(ctx)
+	return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
+}
+
+// ---------------- DUMP / RESTORE ----------------
+
+// fnDumpMagic 自定帧头（真机 RDB 帧无法复刻；魔数不同则双方 payload 互斥，
+// 落 bad-payload 错，跨引擎不可互恢复见文档）。
+const fnDumpMagic = "GDISFN01"
+
+// errFnBadPayload 非法 payload 文案（真机 7.2.6 探针原文）。
+const errFnBadPayload = "ERR DUMP payload version or checksum are wrong"
+
+// dump FUNCTION DUMP：库名排序后帧序列化（magic + 库数 + 每库名/源码长前缀）。
+func (h *fnHandler) dump() protocol.Value {
+	h.store.mu.RLock()
+	libs := make([]*fnLibrary, 0, len(h.store.libs))
+	for _, lib := range h.store.libs {
+		libs = append(libs, lib)
+	}
+	h.store.mu.RUnlock()
+	sort.Slice(libs, func(i, j int) bool { return libs[i].name < libs[j].name })
+	return protocol.BulkOf(encodeFnDump(libs))
+}
+
+func encodeFnDump(libs []*fnLibrary) string {
+	buf := make([]byte, 0, 64)
+	buf = append(buf, fnDumpMagic...)
+	var tmp [binary.MaxVarintLen64]byte
+	put := func(n uint64) {
+		m := binary.PutUvarint(tmp[:], n)
+		buf = append(buf, tmp[:m]...)
+	}
+	put(uint64(len(libs)))
+	for _, lib := range libs {
+		put(uint64(len(lib.name)))
+		buf = append(buf, lib.name...)
+		put(uint64(len(lib.code)))
+		buf = append(buf, lib.code...)
+	}
+	return string(buf)
+}
+
+// fnDumpLib 帧内一库（名 + 源码）；compile 前比对 header 库名做完整性校验。
+type fnDumpLib struct {
+	name string
+	code string
+}
+
+func decodeFnDump(payload string) ([]fnDumpLib, bool) {
+	b := []byte(payload)
+	if len(b) < len(fnDumpMagic) || string(b[:len(fnDumpMagic)]) != fnDumpMagic {
+		return nil, false
+	}
+	rest := b[len(fnDumpMagic):]
+	take := func() (uint64, bool) {
+		n, m := binary.Uvarint(rest)
+		if m <= 0 {
+			return 0, false
+		}
+		rest = rest[m:]
+		return n, true
+	}
+	count, ok := take()
+	if !ok || count > uint64(len(rest)) {
+		return nil, false
+	}
+	libs := make([]fnDumpLib, 0, count)
+	seen := map[string]struct{}{}
+	for i := uint64(0); i < count; i++ {
+		nl, ok := take()
+		if !ok || nl > uint64(len(rest)) {
+			return nil, false
+		}
+		name := string(rest[:nl])
+		rest = rest[nl:]
+		cl, ok := take()
+		if !ok || cl > uint64(len(rest)) {
+			return nil, false
+		}
+		code := string(rest[:cl])
+		rest = rest[cl:]
+		if _, dup := seen[name]; dup {
+			return nil, false
+		}
+		seen[name] = struct{}{}
+		libs = append(libs, fnDumpLib{name: name, code: code})
+	}
+	if len(rest) != 0 {
+		return nil, false
+	}
+	return libs, true
+}
+
+// restoreFn FUNCTION RESTORE <payload> [FLUSH|APPEND|REPLACE]：两阶段（全解析+
+// 编译校验 → 持锁冲突检查 → 应用），中途失败不污染现存库。
+func (h *fnHandler) restoreFn(ctx context.Context, args []protocol.Value) protocol.Value {
+	if len(args) < 2 {
+		return wrongArgs("function|restore")
+	}
+	if len(args) > 3 {
+		return errValueStr("ERR unknown subcommand or wrong number of arguments for 'RESTORE'. Try FUNCTION HELP.")
+	}
+	payload, ok := argString(args[1])
+	if !ok {
+		return wrongArgs("function|restore")
+	}
+	policy := "APPEND"
+	if len(args) == 3 {
+		p, ok := argString(args[2])
+		if !ok || (!strings.EqualFold(p, "FLUSH") && !strings.EqualFold(p, "APPEND") && !strings.EqualFold(p, "REPLACE")) {
+			return errValueStr("ERR Wrong restore policy given, value should be either FLUSH, APPEND or REPLACE.")
+		}
+		policy = strings.ToUpper(p)
+	}
+	raws, ok := decodeFnDump(payload)
+	if !ok {
+		return errValueStr(errFnBadPayload)
+	}
+	libs := make([]*fnLibrary, 0, len(raws))
+	for _, r := range raws {
+		lib, _, ok := compileLibrary(r.code)
+		if !ok || lib.name != r.name {
+			return errValueStr(errFnBadPayload)
+		}
+		libs = append(libs, lib)
+	}
+	h.store.mu.Lock()
+	defer h.store.mu.Unlock()
+	if policy != "FLUSH" {
+		for _, lib := range libs {
+			if policy == "APPEND" {
+				if _, exists := h.store.libs[lib.name]; exists {
+					return errValueStr("ERR Library " + lib.name + " already exists")
+				}
+			}
+			for _, d := range lib.funcs {
+				if ref, found := h.store.fns[strings.ToLower(d.name)]; found {
+					if !(policy == "REPLACE" && ref.libName == lib.name) {
+						return errValueStr("ERR Function " + d.name + " already exists")
+					}
+				}
 			}
 		}
+	} else {
+		h.store.clearLocked()
+		h.store.sweepKV(ctx)
+	}
+	for _, lib := range libs {
+		h.store.commitLocked(lib, policy == "REPLACE", true)
 	}
 	return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
 }
@@ -651,13 +839,34 @@ func (h *fnHandler) list(args []protocol.Value) protocol.Value {
 	return protocol.ArrayOf(out...)
 }
 
-// stats FUNCTION STATS：running_script 恒 null（无 FUNCTION KILL 追踪）。
+// stats FUNCTION STATS：running_script 取最早在飞者（name/command/duration_ms），
+// 无在飞时为 null。
 func (h *fnHandler) stats() protocol.Value {
 	h.store.mu.RLock()
 	nLibs, nFns := len(h.store.libs), len(h.store.fns)
 	h.store.mu.RUnlock()
+	running := fnNullVal()
+	h.runMu.Lock()
+	var earliest *fnRunInfo
+	for info := range h.runs {
+		if earliest == nil || info.start.Before(earliest.start) {
+			earliest = info
+		}
+	}
+	h.runMu.Unlock()
+	if earliest != nil {
+		cmdVals := make([]protocol.Value, 0, len(earliest.command))
+		for _, c := range earliest.command {
+			cmdVals = append(cmdVals, protocol.BulkOf(c))
+		}
+		running = protocol.ArrayOf(
+			protocol.BulkOf("name"), protocol.BulkOf(earliest.name),
+			protocol.BulkOf("command"), protocol.ArrayOf(cmdVals...),
+			protocol.BulkOf("duration_ms"), fnInt(int(time.Since(earliest.start).Milliseconds())),
+		)
+	}
 	return protocol.ArrayOf(
-		protocol.BulkOf("running_script"), fnNullVal(),
+		protocol.BulkOf("running_script"), running,
 		protocol.BulkOf("engines"),
 		protocol.ArrayOf(
 			protocol.BulkOf("LUA"),
@@ -698,7 +907,13 @@ func (h *fnHandler) handleFcall(ro bool) func(context.Context, []protocol.Value)
 		if ro && !ref.def.hasNoWrites() {
 			return errValueStr("ERR Can not execute a script with write flag using *_ro command.")
 		}
-		return h.runFunction(ctx, ref, keys, argv, ro)
+		cmdTokens := make([]string, 0, len(args)+1)
+		cmdTokens = append(cmdTokens, strings.ToUpper(cmdName))
+		for _, a := range args {
+			s, _ := argString(a)
+			cmdTokens = append(cmdTokens, s)
+		}
+		return h.runFunction(ctx, ref, keys, argv, ro, cmdTokens)
 	}
 }
 
@@ -737,7 +952,7 @@ func splitFcallKeys(args []protocol.Value) (keys, argv []string, errVal protocol
 // `return 1,2` → :1）。KEYS/ARGV 不设全局（走形参；hardenSandbox 下访问全局
 // KEYS 抛 nonexistent global → pcall false,false）。readonly：FCALL_RO 或
 // fn 带 no-writes 时 luaCall 内拦截写命令。
-func (h *fnHandler) runFunction(ctx context.Context, ref fnRef, keys, argv []string, ro bool) protocol.Value {
+func (h *fnHandler) runFunction(ctx context.Context, ref fnRef, keys, argv []string, ro bool, cmd []string) protocol.Value {
 	L := lua.NewState()
 	defer L.Close()
 	tctx, cancel := context.WithCancel(ctx)
@@ -748,6 +963,16 @@ func (h *fnHandler) runFunction(ctx context.Context, ref fnRef, keys, argv []str
 		defer tc()
 	}
 	L.SetContext(tctx)
+
+	info := &fnRunInfo{name: ref.def.name, command: cmd, start: time.Now()}
+	h.runMu.Lock()
+	h.runs[info] = struct{}{}
+	h.runMu.Unlock()
+	defer func() {
+		h.runMu.Lock()
+		delete(h.runs, info)
+		h.runMu.Unlock()
+	}()
 
 	rr := &luaRun{cancel: cancel, fnRun: true, readonly: ro || ref.def.hasNoWrites()}
 	h.exec.registerRedisLib(L, ctx, rr)
@@ -771,6 +996,9 @@ func (h *fnHandler) runFunction(ctx context.Context, ref fnRef, keys, argv []str
 	defer h.exec.reg.untrack(rr)
 	L.Push(fn)
 	if err := L.PCall(0, 1, nil); err != nil {
+		if h.exec.reg.wasKilled(rr) {
+			return fnKilledError(err, ref.def.name)
+		}
 		if cemsg, ok := cjsonErrFrom(err); ok {
 			return errValueStr(fmt.Sprintf("ERR %s script: %s, on @user_function:1.", cemsg, ref.def.name))
 		}
@@ -785,6 +1013,9 @@ func (h *fnHandler) runFunction(ctx context.Context, ref fnRef, keys, argv []str
 	L.Push(strSliceTable(L, keys))
 	L.Push(strSliceTable(L, argv))
 	if err := L.PCall(2, 1, nil); err != nil {
+		if h.exec.reg.wasKilled(rr) {
+			return fnKilledError(err, ref.def.name)
+		}
 		if cemsg, ok := cjsonErrFrom(err); ok {
 			return errValueStr(fmt.Sprintf("ERR %s script: %s, on @user_function:1.", cemsg, ref.def.name))
 		}
@@ -797,6 +1028,16 @@ func (h *fnHandler) runFunction(ctx context.Context, ref fnRef, keys, argv []str
 		return fnScriptError(err, ref.def.name)
 	}
 	return v
+}
+
+// fnKilledError 被 KILL 中断的函数调用方文案（真机 7.2.6 探针：沿用 SCRIPT KILL
+// 字样 + 函数名 + user_function 行号，取 traceback 首个行号，缺省 1）。
+func fnKilledError(err error, fn string) protocol.Value {
+	line := 1
+	if m := fnUserLineAnyRe.FindStringSubmatch(err.Error()); m != nil {
+		line, _ = strconv.Atoi(m[1])
+	}
+	return errValueStr(fmt.Sprintf("ERR Script killed by user with SCRIPT KILL... script: %s, on @user_function:%d.", fn, line))
 }
 
 // fnCommentBody 首行整体加 --（保持行号）；与 parseFunctionHeader 同规则。

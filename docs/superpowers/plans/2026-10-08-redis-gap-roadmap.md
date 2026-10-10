@@ -144,6 +144,8 @@
 
 先做：LOAD/FLUSH/LIST/FCALL/FCALL_RO/STATS；DUMP/RESTORE（序列化格式自定+文档）可拆第二笔。
 
+**二批 ✅ 已交付 2026-10-10**：FUNCTION KILL（复用 fnReg kill 三态）+ STATS running_script（在飞追踪）+ DUMP（自定帧 magic `GDISFN01`，库名排序）+ RESTORE（两阶段 FLUSH/APPEND/REPLACE），真机 7.2.6 探针逐字对齐；跨引擎 payload 不互通（文档 + CONTEXT 偏差记录注明）。
+
 ### Phase 7: Keyspace 通知（P1，M，跨切面）—— ✅ 已交付 2026-10-10（commit 5a783c5..f45c2dc）
 
 - `CONFIG SET notify-keyspace-events <string>` 生效（Phase 2 已占位）。**已交付**：TEA 支持，KEA 全量生效。

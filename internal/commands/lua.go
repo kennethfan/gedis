@@ -111,6 +111,19 @@ func (r *LuaRegistry) kill() (killed, unkillable bool) {
 	return true, false
 }
 
+// killResult 把 kill() 三态转协议回复（SCRIPT KILL 与 FUNCTION KILL 共用）。
+func (r *LuaRegistry) killResult() protocol.Value {
+	killed, unkillable := r.kill()
+	switch {
+	case unkillable:
+		return errValueStr("UNKILLABLE Sorry the script already executed write commands against the dataset. You can either wait the script termination or kill the server in a hard way using the SHUTDOWN NOSAVE command.")
+	case killed:
+		return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
+	default:
+		return errValueStr("NOTBUSY No scripts in execution right now.")
+	}
+}
+
 // markDirty 标记某次执行已分发过写命令（分发前拒绝的不调此函数）。
 func (r *LuaRegistry) markDirty(rr *luaRun) {
 	r.mu.Lock()
@@ -280,15 +293,7 @@ func (e *luaExec) handleScript(_ context.Context, args []protocol.Value) protoco
 		if len(args) != 1 {
 			return errValueStr("ERR wrong number of arguments for 'script|kill' command")
 		}
-		killed, unkillable := e.reg.kill()
-		switch {
-		case unkillable:
-			return errValueStr("UNKILLABLE Sorry the script already executed write commands against the dataset. You can either wait the script termination or kill the server in a hard way using the SHUTDOWN NOSAVE command.")
-		case killed:
-			return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
-		default:
-			return errValueStr("NOTBUSY No scripts in execution right now.")
-		}
+		return e.reg.killResult()
 	default:
 		return errValueStr(fmt.Sprintf("ERR unknown subcommand '%s'. Try SCRIPT HELP.", sanitizeSub(sub)))
 	}
