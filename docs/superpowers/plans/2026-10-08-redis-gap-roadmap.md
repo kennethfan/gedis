@@ -151,11 +151,11 @@
 - `__keyspace@0__` / `__keyevent@0__` 频道复用现有 PubSub 通道。**已交付**：K/E 双频道，三重门。
 - 遗留：d/m/n/o/c 配置字母接受但无对应事件；MOVE 事件单库不可达；ZPOPMIN/ZPOPMAX/BZPOP\* 等事件表外命令不发事件（见 CONTEXT 偏差记录）。
 
-### Phase 8: CLIENT TRACKING（P1，M；依赖 Phase 1 的 RESP3 标记）
+### Phase 8: CLIENT TRACKING（P1，M；依赖 Phase 1 的 RESP3 标记）—— ✅ 已交付 2026-10-10（batch2 commits cba654a/cc51c85/70b59ef）
 
-- `CLIENT TRACKING ON/OFF [BCAST] [PREFIX] [OPTIN/OPTOUT] [NOLOOP]`；失效消息走 RESP3 push（RESP3 连接）/ RESP2 兼容降级（文档注明）。
-- 先做 NOLOOP 默认语义 + BCAST；OPTIN/OPTOUT 的 `CLIENT CACHING yes/no` 配合。
-- 依赖 Phase 7 的失效事件源（key 修改事件复用通知管线，只发给 tracking 表）。
+- `CLIENT TRACKING ON/OFF [BCAST] [PREFIX] [OPTIN/OPTOUT] [NOLOOP]`；失效消息走 RESP3 push（RESP3 连接）/ RESP2 兼容降级（`__redis__:invalidate` 通道）。**已交付**。
+- 先做 NOLOOP 默认语义 + BCAST；OPTIN/OPTOUT 的 `CLIENT CACHING yes/no` 配合。**已交付（BCAST/PREFIX 可重复/NOLOOP/CACHING 全量，off/断连/写错三路清理收敛，见 CONTEXT 偏差记录）**。
+- 依赖 Phase 7 的失效事件源（key 修改事件复用通知管线，只发给 tracking 表）。**实现调整：失效不复用 notify 通路，走独立存储 change hook（Set/Delete/WriteBatch + 逐出 evictHook）→ 跟踪表反查（S7 硬约束：不受 notify-keyspace-events 门控）**。
 
 ### Phase 9: 逐出策略补齐（P1，S-M；LFU 依赖 Phase 2 的 OBJECT FREQ 字段位）—— ✅ 已交付 2026-10-10（commit 365c950）
 

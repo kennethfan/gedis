@@ -13,7 +13,9 @@ A Redis-compatible storage engine in Go, backed by Pebble (pure-Go LSM-tree).
 - **Replication** — PSYNC (full RDB + backlog partial sync), read-only replicas
 - **Memory management** — maxmemory + 8 eviction policies (allkeys/volatile × lru/lfu/random/ttl), runtime CONFIG
 - **Keyspace notifications** — `CONFIG SET notify-keyspace-events KEA` full-class events (g/s/h/l/z/x/e/m), keyspace + keyevent channels
-- **New commands** — GETSET/SETEX/PSETEX/SETNX/TOUCH, LMOVE/BLMOVE/RPOPLPUSH/BRPOPLPUSH, READONLY/READWRITE, OBJECT IDLETIME/FREQ
+- **New commands** — GETSET/SETEX/PSETEX/SETNX/TOUCH, LMOVE/BLMOVE/RPOPLPUSH/BRPOPLPUSH, READONLY/READWRITE, OBJECT IDLETIME/FREQ, HEXPIRETIME/HPEXPIRETIME, SUBSTR, SWAPDB, COMMAND LIST
+- **Live command stream** — MONITOR / CLIENT MONITOR with per-conn serialized outbound pipe + per-conn write lock
+- **Client-side caching** — CLIENT TRACKING (on/off, BCAST/PREFIX, OPTIN/CACHING, OPTOUT, NOLOOP); invalidation via RESP3 push / RESP2 `__redis__:invalidate`, independent of notify-keyspace-events
 - **Monitoring** — six-section INFO + SLOWLOG + Prometheus `/metrics`
 - **Server-side TLS** — listener-side `[server] tls_cert/tls_key` (outbound dial-side TLS follows `[tls]` config via `tlsdial`)
 
@@ -122,7 +124,7 @@ make bench   # Benchmarks
 
 ## Scope (not yet implemented)
 
-RDB/AOF persistence (BGSAVE/SAVE return an honest error; no RDB/AOF), CLIENT TRACKING (Phase 8), and remaining gap commands (HEXPIRETIME/HPEXPIRETIME, MONITOR, SUBSTR, SWAPDB, COMMAND LIST, CONFIG REWRITE).
+RDB/AOF persistence (BGSAVE/SAVE return an honest error; no RDB/AOF) and CONFIG REWRITE (honest rejection).
 
 ## License
 

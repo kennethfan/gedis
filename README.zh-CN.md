@@ -13,7 +13,9 @@
 - **主从复制** — PSYNC（全量 RDB + backlog 部分同步），只读复本
 - **内存管理** — maxmemory + 8 种逐出策略（allkeys/volatile × lru/lfu/random/ttl），CONFIG 运行时调整
 - **Keyspace 通知** — `CONFIG SET notify-keyspace-events KEA` 全类事件（g/s/h/l/z/x/e/m），keyspace + keyevent 双频道
-- **新增命令** — GETSET/SETEX/PSETEX/SETNX/TOUCH，LMOVE/BLMOVE/RPOPLPUSH/BRPOPLPUSH，READONLY/READWRITE，OBJECT IDLETIME/FREQ
+- **新增命令** — GETSET/SETEX/PSETEX/SETNX/TOUCH，LMOVE/BLMOVE/RPOPLPUSH/BRPOPLPUSH，READONLY/READWRITE，OBJECT IDLETIME/FREQ，HEXPIRETIME/HPEXPIRETIME，SUBSTR，SWAPDB，COMMAND LIST
+- **实时命令流** — MONITOR / CLIENT MONITOR，per-conn 串行出站管道 + per-conn 写锁
+- **客户端缓存** — CLIENT TRACKING（on/off、BCAST/PREFIX、OPTIN/CACHING、OPTOUT、NOLOOP）；失效走 RESP3 push / RESP2 `__redis__:invalidate`，独立于 notify-keyspace-events
 - **监控** — INFO 六 section + SLOWLOG + Prometheus `/metrics`
 - **服务端 TLS** — 监听口 `[server] tls_cert/tls_key`（出向 dial 端 TLS 走 `[tls]` 配置，见 tlsdial）
 
@@ -122,7 +124,7 @@ make bench   # 基准测试
 
 ## Scope（v1 未实现）
 
-RDB/AOF 持久化（BGSAVE/SAVE 诚实报错；无 RDB/AOF），CLIENT TRACKING（Phase 8），剩余缺口命令（HEXPIRETIME/HPEXPIRETIME、MONITOR、SUBSTR、SWAPDB、COMMAND LIST、CONFIG REWRITE）。
+RDB/AOF 持久化（BGSAVE/SAVE 诚实报错；无 RDB/AOF）与 CONFIG REWRITE（诚实拒绝）。
 
 ## License
 
