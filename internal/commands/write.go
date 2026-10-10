@@ -8,7 +8,7 @@ import (
 // REPLICAOF/PSYNC/SLOWLOG 等管理命令不在其中。
 func WriteCommandSet() map[string]bool {
 	names := []string{
-		"SET", "GETDEL", "GETEX", "DEL", "UNLINK",
+		"SET", "GETDEL", "GETEX", "GETSET", "SETEX", "PSETEX", "SETNX", "DEL", "UNLINK",
 		"MSET", "MSETNX",
 		"INCR", "INCRBY", "DECR", "DECRBY", "INCRBYFLOAT",
 		"APPEND", "SETRANGE",
