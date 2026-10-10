@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/kennethfan/gedis/internal/protocol"
@@ -124,4 +125,19 @@ func Notify(class, event, key string) {
 	if mask&notifyE != 0 {
 		pub("__keyevent@0__:"+event, protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte(key)})
 	}
+}
+
+// userKeyFromRaw 剥掉存储层类型前缀还原用户 key（无前缀返回原串）。
+func userKeyFromRaw(raw string) string {
+	for _, p := range typePrefixes {
+		if strings.HasPrefix(raw, p) {
+			return strings.TrimPrefix(raw, p)
+		}
+	}
+	return raw
+}
+
+// NotifyEvicted 由 storage 逐出回调触发，发布 evicted（class e）。
+func NotifyEvicted(rawKey string) {
+	Notify("e", "evicted", userKeyFromRaw(rawKey))
 }

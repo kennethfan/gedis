@@ -78,6 +78,13 @@ func (p *Pebble) EvictedCount() int64 {
 	return p.evicted.Load()
 }
 
+// SetEvictHook 注册逐出回调（raw key）；nil 清除。
+func (p *Pebble) SetEvictHook(fn func(string)) {
+	p.lruMu.Lock()
+	p.evictHook = fn
+	p.lruMu.Unlock()
+}
+
 // ObjectStats 返回 rawKey 的空闲秒数与 LFU 计数；不刷新访问时钟
 // （OBJECT 读取自身不得污染统计）。未跟踪的 key 返回 ok=false。
 func (p *Pebble) ObjectStats(ctx context.Context, rawKey []byte) (idleSec uint64, freq uint8, ok bool) {
@@ -255,5 +262,11 @@ func (p *Pebble) evictOne(ctx context.Context) bool {
 		return false
 	}
 	p.evicted.Add(1)
+	p.lruMu.Lock()
+	hook := p.evictHook
+	p.lruMu.Unlock()
+	if hook != nil {
+		hook(victimKey)
+	}
 	return true
 }

@@ -21,6 +21,7 @@ func wireMainRouter(t *testing.T) *network.Router {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
+	store.SetEvictHook(NotifyEvicted)
 	stats := network.NewStats()
 	hub := replication.NewHub(1024)
 	r := network.DefaultRouter()

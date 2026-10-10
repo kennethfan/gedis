@@ -455,6 +455,7 @@ func (h *streamHandler) xgroupCreate(ctx context.Context, args []protocol.Value)
 	if werr := h.writeStream(ctx, key, s, expiry); werr != nil {
 		return errValue(werr)
 	}
+	Notify("t", "xgroup-create", key)
 	return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
 }
 
@@ -514,6 +515,7 @@ func (h *streamHandler) xgroupSetID(ctx context.Context, args []protocol.Value) 
 	if werr := h.writeStream(ctx, key, s, expiry); werr != nil {
 		return errValue(werr)
 	}
+	Notify("t", "xgroup-setid", key)
 	return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
 }
 
@@ -542,6 +544,7 @@ func (h *streamHandler) xgroupDestroy(ctx context.Context, args []protocol.Value
 			if werr := h.writeStream(ctx, key, s, expiry); werr != nil {
 				return errValue(werr)
 			}
+			Notify("t", "xgroup-destroy", key)
 			return protocol.Value{Kind: protocol.KindInteger, I: 1}
 		}
 	}
@@ -581,6 +584,7 @@ func (h *streamHandler) xgroupCreateConsumer(ctx context.Context, args []protoco
 	if werr := h.writeStream(ctx, key, s, expiry); werr != nil {
 		return errValue(werr)
 	}
+	Notify("t", "xgroup-createconsumer", key)
 	return protocol.Value{Kind: protocol.KindInteger, I: 1}
 }
 
@@ -633,5 +637,6 @@ func (h *streamHandler) xgroupDelConsumer(ctx context.Context, args []protocol.V
 	if werr := h.writeStream(ctx, key, s, expiry); werr != nil {
 		return errValue(werr)
 	}
+	Notify("t", "xgroup-delconsumer", key)
 	return protocol.Value{Kind: protocol.KindInteger, I: dropped}
 }

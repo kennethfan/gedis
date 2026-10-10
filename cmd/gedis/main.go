@@ -110,6 +110,7 @@ func run() error {
 		return fmt.Errorf("open store: %w", err)
 	}
 	defer func() { _ = store.Close() }()
+	store.SetEvictHook(commands.NotifyEvicted)
 
 	router := network.DefaultRouter()
 	srv := network.NewServer(router)

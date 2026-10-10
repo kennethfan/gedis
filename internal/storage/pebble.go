@@ -33,6 +33,7 @@ type Pebble struct {
 	maxBytes  atomic.Int64
 	policy    string
 	evicted   atomic.Int64
+	evictHook func(string)
 }
 
 // New 返回绑定到 path 目录的 Pebble 存储（默认选项）。Open 之前不可读写。

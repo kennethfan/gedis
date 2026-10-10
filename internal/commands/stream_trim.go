@@ -126,5 +126,6 @@ func (h *streamHandler) xtrim(ctx context.Context, args []protocol.Value) protoc
 	if werr := h.writeStream(ctx, key, s, expiry); werr != nil {
 		return errValue(werr)
 	}
+	Notify("t", "xtrim", key)
 	return protocol.Value{Kind: protocol.KindInteger, I: deleted}
 }

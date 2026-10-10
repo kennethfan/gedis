@@ -109,6 +109,7 @@ func (h *streamHandler) xadd(ctx context.Context, args []protocol.Value) protoco
 	if werr := h.writeStream(ctx, key, s, expiry); werr != nil {
 		return errValue(werr)
 	}
+	Notify("t", "xadd", key)
 	return protocol.BulkOf(id.String())
 }
 
@@ -249,6 +250,7 @@ func (h *streamHandler) xsetid(ctx context.Context, args []protocol.Value) proto
 	if werr := h.writeStream(ctx, key, s, expiry); werr != nil {
 		return errValue(werr)
 	}
+	Notify("t", "xsetid", key)
 	return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
 }
 
@@ -414,6 +416,9 @@ func (h *streamHandler) xdel(ctx context.Context, args []protocol.Value) protoco
 	}
 	if werr := h.writeStream(ctx, key, s, expiry); werr != nil {
 		return errValue(werr)
+	}
+	if deleted > 0 {
+		Notify("t", "xdel", key)
 	}
 	return protocol.Value{Kind: protocol.KindInteger, I: deleted}
 }

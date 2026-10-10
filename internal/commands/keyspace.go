@@ -67,6 +67,7 @@ func lookupRaw(ctx context.Context, kv KV, key string) ([]byte, datastruct.Entry
 			_ = kv.Delete(ctx, raw)
 			_ = kv.Delete(ctx, datastruct.HashExpKey(key))
 			network.StatsFromContext(ctx).IncExpired()
+			Notify("x", "expired", key)
 			return nil, datastruct.Entry{}, storage.ErrNotFound
 		}
 		return raw, e, nil
