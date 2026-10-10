@@ -77,6 +77,7 @@ func (h *hashHandler) readHash(ctx context.Context, key string) (map[string]stri
 			if werr := h.writeFieldExp(ctx, key, exp); werr != nil {
 				return nil, 0, werr
 			}
+			Notify("h", "hexpired", key)
 		}
 	}
 	return m, e.Expiry, nil
@@ -126,6 +127,7 @@ func (h *hashHandler) hset(ctx context.Context, args []protocol.Value) protocol.
 	if err := h.writeHash(ctx, key, m, expiry); err != nil {
 		return errValue(err)
 	}
+	Notify("h", "hset", key)
 	return protocol.Value{Kind: protocol.KindInteger, I: added}
 }
 
@@ -195,6 +197,9 @@ func (h *hashHandler) hdel(ctx context.Context, args []protocol.Value) protocol.
 			return errValue(err)
 		}
 	}
+	if deleted > 0 {
+		Notify("h", "hdel", key)
+	}
 	return protocol.Value{Kind: protocol.KindInteger, I: deleted}
 }
 
@@ -228,6 +233,7 @@ func (h *hashHandler) hsetnx(ctx context.Context, args []protocol.Value) protoco
 	if err := h.writeHash(ctx, key, m, expiry); err != nil {
 		return errValue(err)
 	}
+	Notify("h", "hset", key)
 	return protocol.Value{Kind: protocol.KindInteger, I: 1}
 }
 

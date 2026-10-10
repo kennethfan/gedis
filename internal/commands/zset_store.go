@@ -308,10 +308,13 @@ func (h *zsetHandler) storeZSetOp(ctx context.Context, args []protocol.Value, na
 	if errReply != nil {
 		return *errReply
 	}
+	oldExisted := false
 	if _, _, err := h.readZSet(ctx, dst); err != nil {
 		if !isNotFound(err) {
 			return errValue(err)
 		}
+	} else {
+		oldExisted = true
 	}
 	sets, errReply := h.readZSets(ctx, spec.keys)
 	if errReply != nil {
@@ -329,6 +332,10 @@ func (h *zsetHandler) storeZSetOp(ctx context.Context, args []protocol.Value, na
 	}
 	if err := h.kv.WriteBatch(ctx, ops); err != nil {
 		return errValue(err)
+	}
+	Notify("z", name, dst)
+	if len(res) == 0 && oldExisted {
+		Notify("g", "del", dst)
 	}
 	return protocol.Value{Kind: protocol.KindInteger, I: int64(len(res))}
 }

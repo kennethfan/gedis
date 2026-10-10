@@ -266,7 +266,19 @@ func (h *setHandler) storeSetOp(ctx context.Context, args []protocol.Value, name
 	if errReply != nil {
 		return *errReply
 	}
-	return h.storeResult(ctx, dst, op(sets))
+	oldExisted := false
+	if _, _, err := h.readSet(ctx, dst); err == nil {
+		oldExisted = true
+	}
+	result := op(sets)
+	out := h.storeResult(ctx, dst, result)
+	if out.Kind != protocol.KindError {
+		Notify("s", name, dst)
+		if len(result) == 0 && oldExisted {
+			Notify("g", "del", dst)
+		}
+	}
+	return out
 }
 
 func (h *setHandler) sscan(ctx context.Context, args []protocol.Value) protocol.Value {

@@ -156,6 +156,7 @@ func (h *hashHandler) hmset(ctx context.Context, args []protocol.Value) protocol
 	if err := h.writeHash(ctx, key, m, expiry); err != nil {
 		return errValue(err)
 	}
+	Notify("h", "hset", key)
 	return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
 }
 

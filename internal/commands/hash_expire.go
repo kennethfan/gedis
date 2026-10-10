@@ -212,6 +212,7 @@ func (h *hashHandler) hexpire(ctx context.Context, args []protocol.Value, kind e
 			return errValue(err)
 		}
 	}
+	Notify("h", "hexpired", key)
 	return protocol.Value{Kind: protocol.KindArray, Elems: out}
 }
 
@@ -349,6 +350,7 @@ func (h *hashHandler) hpersist(ctx context.Context, args []protocol.Value) proto
 		if err := h.writeFieldExp(ctx, fields.key, sidecar); err != nil {
 			return errValue(err)
 		}
+		Notify("h", "hpersist", fields.key)
 	}
 	return protocol.Value{Kind: protocol.KindArray, Elems: out}
 }

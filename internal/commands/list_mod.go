@@ -64,6 +64,7 @@ func (h *listHandler) lset(ctx context.Context, args []protocol.Value) protocol.
 	if err := h.writeList(ctx, key, elems, expiry); err != nil {
 		return errValue(err)
 	}
+	Notify("l", "lset", key)
 	return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
 }
 
@@ -117,6 +118,7 @@ func (h *listHandler) linsert(ctx context.Context, args []protocol.Value) protoc
 	if err := h.writeList(ctx, key, elems, expiry); err != nil {
 		return errValue(err)
 	}
+	Notify("l", "linsert", key)
 	return protocol.Value{Kind: protocol.KindInteger, I: int64(len(elems))}
 }
 
@@ -174,12 +176,15 @@ func (h *listHandler) lrem(ctx context.Context, args []protocol.Value) protocol.
 	}
 	if len(kept) == 0 && removed > 0 {
 		_ = h.kv.Delete(ctx, datastruct.ListKey(key))
+		Notify("l", "lrem", key)
+		Notify("g", "del", key)
 		return protocol.Value{Kind: protocol.KindInteger, I: removed}
 	}
 	if removed > 0 {
 		if err := h.writeList(ctx, key, kept, expiry); err != nil {
 			return errValue(err)
 		}
+		Notify("l", "lrem", key)
 	}
 	return protocol.Value{Kind: protocol.KindInteger, I: removed}
 }
@@ -241,10 +246,13 @@ func (h *listHandler) ltrim(ctx context.Context, args []protocol.Value) protocol
 	}
 	if len(kept) == 0 {
 		_ = h.kv.Delete(ctx, datastruct.ListKey(key))
+		Notify("l", "ltrim", key)
+		Notify("g", "del", key)
 		return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
 	}
 	if err := h.writeList(ctx, key, kept, expiry); err != nil {
 		return errValue(err)
 	}
+	Notify("l", "ltrim", key)
 	return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
 }
