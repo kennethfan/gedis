@@ -14,6 +14,7 @@ func WriteCommandSet() map[string]bool {
 		"APPEND", "SETRANGE",
 		"HSET", "HMSET", "HDEL", "HSETNX", "HINCRBY", "HINCRBYFLOAT",
 		"LPUSH", "RPUSH", "LPOP", "RPOP",
+		"LMOVE", "BLMOVE", "RPOPLPUSH", "BRPOPLPUSH",
 		"LSET", "LINSERT", "LREM", "LTRIM",
 		"BLPOP", "BRPOP", "BLMPOP", "BRMPOP", "LMPOP",
 		"BZMPOP", "ZMPOP",

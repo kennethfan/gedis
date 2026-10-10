@@ -113,7 +113,7 @@ func Test_Conn_when_Echo(t *testing.T) {
 func Test_Conn_when_Command(t *testing.T) {
 	r, _ := openConnSetup(t)
 	got := dispatch(r, "COMMAND", "COUNT")
-	require.Equal(t, protocol.Value{Kind: protocol.KindInteger, I: 7}, got)
+	require.Equal(t, protocol.Value{Kind: protocol.KindInteger, I: 9}, got)
 
 	got = dispatch(r, "COMMAND", "INFO", "HELLO")
 	require.Equal(t, protocol.KindArray, got.Kind)

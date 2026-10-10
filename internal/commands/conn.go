@@ -24,6 +24,8 @@ var connMeta = []acl.Meta{
 	{Name: "ECHO", Category: "connection", Keys: acl.KeySpec{First: -1}},
 	{Name: "RESET", Category: "connection", Keys: acl.KeySpec{First: -1}},
 	{Name: "COMMAND", Category: "connection", Keys: acl.KeySpec{First: -1}},
+	{Name: "READONLY", Category: "admin", ReadOnly: true, Keys: acl.KeySpec{First: -1}},
+	{Name: "READWRITE", Category: "admin", ReadOnly: true, Keys: acl.KeySpec{First: -1}},
 }
 
 // ConnState 是单连接的可变状态：RESP 协议版本、连接名与自增序号。
@@ -33,6 +35,9 @@ type ConnState struct {
 	ID    int64
 	Proto int
 	Name  string
+	// ReadOnly 记录 READONLY 置位、READWRITE 清零的 per-conn 标志；
+	// 集群副本读路由落地前仅存不读。
+	ReadOnly bool
 }
 
 // ConnInfo 是 CLIENT LIST 用的连接快照行。
@@ -93,6 +98,13 @@ func (c *ConnRegistry) SetProto(conn net.Conn, ver int) {
 	c.state(conn).Proto = ver
 }
 
+// SetConnReadOnly 写入 READONLY/READWRITE 的 per-conn 标志。
+func (c *ConnRegistry) SetConnReadOnly(conn net.Conn, v bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.state(conn).ReadOnly = v
+}
+
 // ProtoOf 返回连接的 RESP 版本；无记录（单测直调）默认 2。
 func (c *ConnRegistry) ProtoOf(conn net.Conn) int {
 	c.mu.Lock()
@@ -146,6 +158,8 @@ func RegisterConn(r *network.Router, st AuthStore, auth *AuthRegistry) *ConnRegi
 	r.Register("ECHO", h.echo)
 	r.Register("RESET", h.reset)
 	r.Register("COMMAND", h.command)
+	r.Register("READONLY", h.readonly)
+	r.Register("READWRITE", h.readwrite)
 	return c
 }
 
@@ -303,6 +317,26 @@ func (h *connHandler) reset(ctx context.Context, args []protocol.Value) protocol
 		h.conns.Reset(conn)
 	}
 	return protocol.Value{Kind: protocol.KindSimpleString, S: "RESET"}
+}
+
+func (h *connHandler) readonly(ctx context.Context, args []protocol.Value) protocol.Value {
+	if len(args) != 0 {
+		return errValueStr("ERR wrong number of arguments for 'readonly' command")
+	}
+	if conn, ok := network.ConnFromContext(ctx); ok && conn != nil {
+		h.conns.SetConnReadOnly(conn, true)
+	}
+	return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
+}
+
+func (h *connHandler) readwrite(ctx context.Context, args []protocol.Value) protocol.Value {
+	if len(args) != 0 {
+		return errValueStr("ERR wrong number of arguments for 'readwrite' command")
+	}
+	if conn, ok := network.ConnFromContext(ctx); ok && conn != nil {
+		h.conns.SetConnReadOnly(conn, false)
+	}
+	return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
 }
 
 func (h *connHandler) command(ctx context.Context, args []protocol.Value) protocol.Value {

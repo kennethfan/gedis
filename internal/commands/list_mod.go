@@ -4,6 +4,7 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kennethfan/gedis/internal/acl"
 	"github.com/kennethfan/gedis/internal/datastruct"
@@ -17,6 +18,10 @@ var listModMeta = []acl.Meta{
 	{Name: "LINSERT", Category: "list", Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "LREM", Category: "list", Keys: acl.KeySpec{First: 0, Last: 0}},
 	{Name: "LTRIM", Category: "list", Keys: acl.KeySpec{First: 0, Last: 0}},
+	{Name: "LMOVE", Category: "list", Keys: acl.KeySpec{First: 0, Last: 1}},
+	{Name: "BLMOVE", Category: "list", Keys: acl.KeySpec{First: 0, Last: 1}},
+	{Name: "RPOPLPUSH", Category: "list", Keys: acl.KeySpec{First: 0, Last: 1}},
+	{Name: "BRPOPLPUSH", Category: "list", Keys: acl.KeySpec{First: 0, Last: 1}},
 }
 
 func (h *listHandler) registerMod(r *network.Router) {
@@ -27,6 +32,10 @@ func (h *listHandler) registerMod(r *network.Router) {
 	r.Register("LINSERT", h.linsert)
 	r.Register("LREM", h.lrem)
 	r.Register("LTRIM", h.ltrim)
+	r.Register("LMOVE", h.lmove)
+	r.Register("BLMOVE", h.blmove)
+	r.Register("RPOPLPUSH", h.rpoplpush)
+	r.Register("BRPOPLPUSH", h.brpoplpush)
 }
 
 func (h *listHandler) lset(ctx context.Context, args []protocol.Value) protocol.Value {
@@ -255,4 +264,237 @@ func (h *listHandler) ltrim(ctx context.Context, args []protocol.Value) protocol
 	}
 	Notify("l", "ltrim", key)
 	return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
+}
+
+// parseMoveSide 把 LEFT/RIGHT 归一为"是否从尾部操作"（RIGHT=tail, LEFT=head）。
+func parseMoveSide(s string) (tail bool, ok bool) {
+	switch strings.ToUpper(s) {
+	case "LEFT":
+		return false, true
+	case "RIGHT":
+		return true, true
+	}
+	return false, false
+}
+
+// parseMoveTimeout 解析阻塞秒数：非法报 not a float，负数报 is negative。
+func parseMoveTimeout(s string) (time.Duration, *protocol.Value) {
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, errPtr("ERR timeout is not a float or out of range")
+	}
+	if f < 0 {
+		return 0, errPtr("ERR timeout is negative")
+	}
+	return time.Duration(f * float64(time.Second)), nil
+}
+
+// moveCore 执行一次原子"源弹出→目标压入"：push 事件先于 pop 事件发布，
+// 源弹空时删除源 key 并补发 del；源空返回 null bulk。
+func (h *listHandler) moveCore(ctx context.Context, src, dst string, fromTail, toTail bool) protocol.Value {
+	srcElems, srcExp, err := h.readList(ctx, src)
+	if err != nil {
+		if isNotFound(err) {
+			return protocol.Value{Kind: protocol.KindBulkString}
+		}
+		return errValue(err)
+	}
+	if len(srcElems) == 0 {
+		return protocol.Value{Kind: protocol.KindBulkString}
+	}
+	var elem string
+	if fromTail {
+		elem = srcElems[len(srcElems)-1]
+		srcElems = srcElems[:len(srcElems)-1]
+	} else {
+		elem = srcElems[0]
+		srcElems = srcElems[1:]
+	}
+	dstElems, dstExp, err := h.readList(ctx, dst)
+	if err != nil {
+		if !isNotFound(err) {
+			return errValue(err)
+		}
+		dstElems, dstExp = nil, 0
+	}
+	if toTail {
+		dstElems = append(dstElems, elem)
+	} else {
+		dstElems = append([]string{elem}, dstElems...)
+	}
+	pushEvent := "lpush"
+	if toTail {
+		pushEvent = "rpush"
+	}
+	popEvent := "lpop"
+	if fromTail {
+		popEvent = "rpop"
+	}
+	if src == dst {
+		if err := h.writeList(ctx, dst, dstElems, srcExp); err != nil {
+			return errValue(err)
+		}
+		Notify("l", pushEvent, dst)
+		Notify("l", popEvent, src)
+		return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte(elem)}
+	}
+	if err := h.writeList(ctx, dst, dstElems, dstExp); err != nil {
+		return errValue(err)
+	}
+	Notify("l", pushEvent, dst)
+	if len(srcElems) == 0 {
+		if err := h.kv.Delete(ctx, datastruct.ListKey(src)); err != nil {
+			return errValue(err)
+		}
+	} else if err := h.writeList(ctx, src, srcElems, srcExp); err != nil {
+		return errValue(err)
+	}
+	Notify("l", popEvent, src)
+	if len(srcElems) == 0 {
+		Notify("g", "del", src)
+	}
+	return protocol.Value{Kind: protocol.KindBulkString, Bulk: []byte(elem)}
+}
+
+func (h *listHandler) lmove(ctx context.Context, args []protocol.Value) protocol.Value {
+	if len(args) != 4 {
+		return errValueStr("ERR wrong number of arguments for 'lmove' command")
+	}
+	src, ok := argString(args[0])
+	if !ok {
+		return errValueStr("ERR invalid key")
+	}
+	dst, ok := argString(args[1])
+	if !ok {
+		return errValueStr("ERR invalid key")
+	}
+	fromStr, ok := argString(args[2])
+	if !ok {
+		return errValueStr("ERR syntax error")
+	}
+	fromTail, ok := parseMoveSide(fromStr)
+	if !ok {
+		return errValueStr("ERR syntax error")
+	}
+	toStr, ok := argString(args[3])
+	if !ok {
+		return errValueStr("ERR syntax error")
+	}
+	toTail, ok := parseMoveSide(toStr)
+	if !ok {
+		return errValueStr("ERR syntax error")
+	}
+	return h.moveCore(ctx, src, dst, fromTail, toTail)
+}
+
+// blockMove 轮询等待源可用后执行 moveCore；timeout<=0 无限等待。
+func (h *listHandler) blockMove(ctx context.Context, src, dst string, fromTail, toTail bool, timeout time.Duration) protocol.Value {
+	if _, _, err := h.readList(ctx, src); err != nil && !isNotFound(err) {
+		return errValue(err)
+	}
+	var deadline time.Time
+	if timeout > 0 {
+		deadline = time.Now().Add(timeout)
+	}
+	blocked := false
+	defer func() {
+		if blocked {
+			h.stats.DecBlocked()
+		}
+	}()
+	for {
+		res := h.moveCore(ctx, src, dst, fromTail, toTail)
+		if res.Kind != protocol.KindBulkString || len(res.Bulk) > 0 {
+			return res
+		}
+		if timeout > 0 && !time.Now().Before(deadline) {
+			return protocol.Value{Kind: protocol.KindBulkString}
+		}
+		if !blocked {
+			h.stats.IncBlocked()
+			blocked = true
+		}
+		select {
+		case <-ctx.Done():
+			return protocol.Value{Kind: protocol.KindBulkString}
+		case <-time.After(blockPollInterval):
+		}
+	}
+}
+
+func (h *listHandler) blmove(ctx context.Context, args []protocol.Value) protocol.Value {
+	if len(args) != 5 {
+		return errValueStr("ERR wrong number of arguments for 'blmove' command")
+	}
+	src, ok := argString(args[0])
+	if !ok {
+		return errValueStr("ERR invalid key")
+	}
+	dst, ok := argString(args[1])
+	if !ok {
+		return errValueStr("ERR invalid key")
+	}
+	fromStr, ok := argString(args[2])
+	if !ok {
+		return errValueStr("ERR syntax error")
+	}
+	fromTail, ok := parseMoveSide(fromStr)
+	if !ok {
+		return errValueStr("ERR syntax error")
+	}
+	toStr, ok := argString(args[3])
+	if !ok {
+		return errValueStr("ERR syntax error")
+	}
+	toTail, ok := parseMoveSide(toStr)
+	if !ok {
+		return errValueStr("ERR syntax error")
+	}
+	ts, ok := argString(args[4])
+	if !ok {
+		return errValueStr("ERR timeout is not a float or out of range")
+	}
+	timeout, errReply := parseMoveTimeout(ts)
+	if errReply != nil {
+		return *errReply
+	}
+	return h.blockMove(ctx, src, dst, fromTail, toTail, timeout)
+}
+
+func (h *listHandler) rpoplpush(ctx context.Context, args []protocol.Value) protocol.Value {
+	if len(args) != 2 {
+		return errValueStr("ERR wrong number of arguments for 'rpoplpush' command")
+	}
+	src, ok := argString(args[0])
+	if !ok {
+		return errValueStr("ERR invalid key")
+	}
+	dst, ok := argString(args[1])
+	if !ok {
+		return errValueStr("ERR invalid key")
+	}
+	return h.moveCore(ctx, src, dst, true, false)
+}
+
+func (h *listHandler) brpoplpush(ctx context.Context, args []protocol.Value) protocol.Value {
+	if len(args) != 3 {
+		return errValueStr("ERR wrong number of arguments for 'brpoplpush' command")
+	}
+	src, ok := argString(args[0])
+	if !ok {
+		return errValueStr("ERR invalid key")
+	}
+	dst, ok := argString(args[1])
+	if !ok {
+		return errValueStr("ERR invalid key")
+	}
+	ts, ok := argString(args[2])
+	if !ok {
+		return errValueStr("ERR timeout is not a float or out of range")
+	}
+	timeout, errReply := parseMoveTimeout(ts)
+	if errReply != nil {
+		return *errReply
+	}
+	return h.blockMove(ctx, src, dst, true, false, timeout)
 }
