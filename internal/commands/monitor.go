@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/kennethfan/gedis/internal/acl"
@@ -52,9 +51,6 @@ type monitorHandler struct {
 	kv    KV
 	stats *network.Stats
 	hub   *replication.Hub
-
-	mu     sync.Mutex
-	notify string
 }
 
 // processStartUnix 供 INFO persistence 段与 LASTSAVE 对齐（进程启动秒）。
@@ -221,8 +217,9 @@ func (h *monitorHandler) config(_ context.Context, args []protocol.Value) protoc
 		}
 		switch strings.ToLower(name) {
 		case "notify-keyspace-events":
-			// Phase 7 的读口占位：先存后取，写路径挂钩时再消费。
-			h.setNotify(val)
+			if err := h.setNotify(val); err != nil {
+				return errValue(err)
+			}
 			return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
 		case "maxmemory":
 			n, err := strconv.ParseInt(val, 10, 64)
@@ -245,15 +242,11 @@ func (h *monitorHandler) config(_ context.Context, args []protocol.Value) protoc
 }
 
 func (h *monitorHandler) getNotify() string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.notify
+	return NotifyString()
 }
 
-func (h *monitorHandler) setNotify(v string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.notify = v
+func (h *monitorHandler) setNotify(v string) error {
+	return SetNotifyString(v)
 }
 
 // persistenceSection 持久化段：无 RDB/AOF，后台保存恒 ok，

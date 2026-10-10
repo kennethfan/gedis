@@ -185,6 +185,7 @@ func (s *stringHandler) set(ctx context.Context, args []protocol.Value) protocol
 	if err := s.kv.Set(ctx, datastruct.StringKey(key), datastruct.EncodeString([]byte(value), expiry)); err != nil {
 		return errValue(err)
 	}
+	Notify("$", "set", key)
 	if opt.get {
 		if !exists {
 			return protocol.Value{Kind: protocol.KindBulkString}
@@ -295,6 +296,7 @@ func (s *stringHandler) del(ctx context.Context, args []protocol.Value) protocol
 		if e.Type == datastruct.TypeHash {
 			_ = s.kv.Delete(ctx, datastruct.HashExpKey(key))
 		}
+		Notify("g", "del", key)
 		n++
 	}
 	return protocol.Value{Kind: protocol.KindInteger, I: n}
