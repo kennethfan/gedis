@@ -148,6 +148,14 @@ issues #52（P2a 编码器）/ #53（P2b 接线）。
 3. `fn:` 内部键不导出（真机 7.2 亦不持久化函数，对齐非偏差）；已过期 key 跳过；跨类型同名 key 接受（last-win）。
 4. BGSAVE 与关库竞速：快照口对已 Close 库回错转后台 err（非 panic）。
 
+## 2026-10-11 缺口盘点（对标 8.0，grill 三轮共识）
+
+issues #55（SETINFO P0）/ #56（脚本与流）/ #57（连接与 ACL）/ #58（服务自省）/ #59（vector set P2 挂起）；模块面（JSON/Search/时序/Bloom）为显性非目标（wontfix），8.2/8.4 增量记 deferred。
+
+### 交付声明
+
+- **CLIENT SETINFO 完成（#55）**：`LIB-NAME`/`LIB-VER` 分存于 ConnState（RESET 联动清空，LIST 展示为 P2）；非法 section / 缺参逐字对齐 7.2.6 探针。
+
 ## References
 
 - [Redis Protocol Specification](https://redis.io/docs/reference/protocol-spec/)

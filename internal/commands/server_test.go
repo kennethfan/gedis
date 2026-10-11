@@ -147,6 +147,54 @@ func Test_Server_when_ClientNames(t *testing.T) {
 	require.Equal(t, protocol.KindError, got.Kind)
 }
 
+// Given: 带连接的 ctx
+// When: CLIENT SETINFO LIB-NAME/LIB-VER
+// Then: 正常回 OK 并入库；坏 section 原 token 回显；缺参报 client|setinfo；
+// RESET 清空库信息；无连接 ctx 报错
+func Test_Server_when_ClientSetinfo(t *testing.T) {
+	hub := replication.NewHub(1024)
+	store := storage.NewWithOptions(t.TempDir(), storage.Options{AppendOnly: true, Fsync: storage.FsyncNo, Hub: hub})
+	require.NoError(t, store.Open())
+	t.Cleanup(func() { _ = store.Close() })
+	r := network.NewRouter()
+	s := network.NewStats()
+	r.AttachStats(s)
+	st := acl.NewStore()
+	authReg := RegisterAuth(r, st)
+	connReg := RegisterConn(r, st, authReg)
+	RegisterServer(r, store, s, hub, connReg, ServerDeps{StartUnix: 1700000000})
+
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+
+	require.Equal(t,
+		protocol.Value{Kind: protocol.KindSimpleString, S: "OK"},
+		dispatchWithConn(r, c1, "CLIENT", "SETINFO", "LIB-NAME", "go-redis"))
+	require.Equal(t,
+		protocol.Value{Kind: protocol.KindSimpleString, S: "OK"},
+		dispatchWithConn(r, c1, "CLIENT", "SETINFO", "lib-ver", "v9.0.0"))
+	name, ver := connReg.LibInfoOf(c1)
+	require.Equal(t, "go-redis", name)
+	require.Equal(t, "v9.0.0", ver)
+
+	got := dispatchWithConn(r, c1, "CLIENT", "SETINFO", "BADSEC", "x")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Equal(t, "ERR Unrecognized option 'BADSEC'", got.S)
+
+	got = dispatchWithConn(r, c1, "CLIENT", "SETINFO", "LIB-NAME")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Equal(t, "ERR wrong number of arguments for 'client|setinfo' command", got.S)
+
+	dispatchWithConn(r, c1, "RESET")
+	name, ver = connReg.LibInfoOf(c1)
+	require.Equal(t, "", name)
+	require.Equal(t, "", ver)
+
+	got = dispatch(r, "CLIENT", "SETINFO", "LIB-NAME", "x")
+	require.Equal(t, protocol.KindError, got.Kind)
+}
+
 // Given: 库中有 string key
 // When: MEMORY USAGE / DOCTOR / STATS
 // Then: USAGE 回正整数估算；缺 key 回空；DOCTOR/STATS 明确不支持
