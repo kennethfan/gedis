@@ -192,6 +192,65 @@ func (p *Pebble) deleteInternal(ctx context.Context, key []byte) error {
 }
 
 // HasAny 只看首键是否存在，供 --load-rdb 空库守卫用；O(1)，不掃全库。
+// Snapshot 是 Pebble 的一致性读视图：BGSAVE 在后台序列化期间持它，
+// 并发写入不撕裂导出。非快照路径（断言失败）回退 live 读，见 commands/save.go。
+type Snapshot struct {
+	snap *pebble.Snapshot
+}
+
+// NewSnapshot 捕获当前最新已提交状态的一致性视图；用后必须 Close。
+// 已 Close 的库回错误而非 panic（BGSAVE 与关库竞速时转后台 err）。
+func (p *Pebble) NewSnapshot() (*Snapshot, error) {
+	if p.db == nil {
+		return nil, fmt.Errorf("storage: snapshot on closed db")
+	}
+	snap := p.db.NewSnapshot()
+	if snap == nil {
+		return nil, fmt.Errorf("storage: snapshot unavailable")
+	}
+	return &Snapshot{snap: snap}, nil
+}
+
+// Get 在快照视图内读单 key（返回拷贝）。
+func (s *Snapshot) Get(key []byte) ([]byte, error) {
+	v, closer, err := s.snap.Get(key)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = closer.Close() }()
+	out := make([]byte, len(v))
+	copy(out, v)
+	return out, nil
+}
+
+// Scan 在快照视图内做前缀扫描（与 Pebble.Scan 同语义，返回 key 拷贝）。
+func (s *Snapshot) Scan(prefix []byte) ([][]byte, error) {
+	iter, err := s.snap.NewIter(&pebble.IterOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("storage: snapshot scan %q: %w", prefix, err)
+	}
+	defer func() { _ = iter.Close() }()
+	var out [][]byte
+	for iter.SeekGE(prefix); iter.Valid(); iter.Next() {
+		k := iter.Key()
+		if !bytes.HasPrefix(k, prefix) {
+			break
+		}
+		cp := make([]byte, len(k))
+		copy(cp, k)
+		out = append(out, cp)
+	}
+	if err := iter.Error(); err != nil {
+		return nil, fmt.Errorf("storage: snapshot scan %q: %w", prefix, err)
+	}
+	return out, nil
+}
+
+// Close 释放快照（BGSAVE 完成后必须调，否则阻塞 LSM 回收）。
+func (s *Snapshot) Close() error {
+	return s.snap.Close()
+}
+
 func (p *Pebble) HasAny(ctx context.Context) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err

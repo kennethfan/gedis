@@ -120,6 +120,17 @@ func run() error {
 	}
 	store.SetEvictHook(commands.OnEvicted)
 	store.SetChangeHook(commands.InvalidateChange)
+	saveFile := cfg.Persistence.DBFilename
+	if saveFile == "" {
+		saveFile = commands.DefaultSaveFileName
+	}
+	commands.SetSaveTarget(store, cfg.Storage.DataDir, saveFile)
+	commands.SetConfigFile(*configPath)
+	if cfg.Notify.KeyspaceEvents != "" {
+		if err := commands.SetNotifyString(cfg.Notify.KeyspaceEvents); err != nil {
+			return fmt.Errorf("invalid notify keyspace_events: %w", err)
+		}
+	}
 
 	router := network.DefaultRouter()
 	srv := network.NewServer(router)

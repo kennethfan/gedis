@@ -28,6 +28,7 @@ type Config struct {
 	Cluster     Cluster     `toml:"cluster"`
 	Sentinel    Sentinel    `toml:"sentinel"`
 	TLS         TLS         `toml:"tls"`
+	Notify      Notify      `toml:"notify"`
 	// RequirePass 映射为 default 用户口令（空=默认全开放）；ACLFile 缺席即关闭持久化。
 	RequirePass string `toml:"requirepass"`
 	ACLFile     string `toml:"aclfile"`
@@ -54,6 +55,16 @@ type Memory struct {
 type Persistence struct {
 	AppendOnly bool   `toml:"appendonly"`
 	Fsync      string `toml:"fsync"`
+	// DBFilename 是 RDB 落盘文件名（SAVE/BGSAVE 用；空=默认 dump.rdb，
+	// 默认值在使用处补，与 AppendOnly/Fsync 一致不在 Load 里补）。
+	DBFilename string `toml:"dbfilename"`
+}
+
+// Notify holds keyspace-notification settings. The raw string is kept
+// verbatim (aliases preserved) so CONFIG GET/REWRITE round-trips it;
+// effective flags are derived by the notify package at apply time.
+type Notify struct {
+	KeyspaceEvents string `toml:"keyspace_events"`
 }
 
 // Metrics holds the Prometheus endpoint settings. Disabled by default

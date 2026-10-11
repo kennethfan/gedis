@@ -82,7 +82,7 @@
 
 **Decisions:**
 - `FLUSHDB`/`FLUSHALL` 必须走 Hub 进复制流（防主从分叉）；实现为特殊 marker，经 `WriteCommandSet` 登记。
-- `BGSAVE`/`BGREWRITEAOF`：本引擎无 RDB/AOF——回 `+OK` 空实现还是报错？选报错 `ERR not supported`（诚实失败优于静默谎言），并在 README 写明。真 RDB 互操作整体推迟到 Phase 10。
+- `BGSAVE`/`BGREWRITEAOF`：本引擎无 RDB/AOF——回 `+OK` 空实现还是报错？选报错 `ERR not supported`（诚实失败优于静默谎言），并在 README 写明。真 RDB 互操作整体推迟到 Phase 10。**（2026-10-11 更新：P2 已交付 SAVE/BGSAVE 真落盘 + LASTSAVE 转正；BGREWRITEAOF 仍诚实报错，见 CONTEXT P2 段。）**
 - `SHUTDOWN`：优雅关机（停 Expirer、刷 Pebble、关 listener）；`NOSAVE/SAVE` 参数接受但 SAVE 为 no-op（Pebble 常驻持久）。
 - `CONFIG`：补 `RESETSTAT`、`GET notify-keyspace-events`（Phase 7 的读口，先占位返回空串）、`maxmemory-policy` 扩展到 Phase 9 的新策略名（先接受、后生效）。
 - `COMMAND DOCS`：从各 `acl.Meta` + 手写 usage 表生成； asks `COMMAND INFO` 复用 Phase 1 的表。
@@ -165,10 +165,11 @@
 - 中：LFU（`allkeys-lfu`/`volatile-lfu`）：每个 key 存 24bit 计数器（参考 Redis `object.freq`），`OBJECT FREQ`/`SET`/`GET` 更新衰减；存储前缀内加字段（注意 Pebble 编码版本兼容——走 datastruct 版本位或独立 `freq:` 前缀）。**已交付（简化 LFU：+1 饱和 255，无概率增量/时间衰减，见 CONTEXT 偏差记录）**。
 - 遗留：LFU 未实现概率增量（counter 抽样）与时间衰减；OBJECT IDLETIME/FREQ 读取会刷新统计。
 
-### Phase 10: RDB/AOF 互操作（P1→P2，XL）—— ✅ 已交付 2026-10-11（RDB 只读加载；迁出未做）
+### Phase 10: RDB/AOF 互操作（P1→P2，XL）—— ✅ 已交付 2026-10-11（RDB 只读加载 + RDB 导出；AOF 未做）
 
 - 最小可用：RDB 只读加载（启动 `--load-rdb` 把真机 RDB 转入 Pebble；自研解析器，以真机 dump 为 fixtures 回归）。**已交付（`internal/rdb` + `--load-rdb`，仅 DB 0，RDB version 11 pin 死，见 CONTEXT 偏差记录）**。
-- 完整 AOF/RDB 双写是存储引擎级改造，不在 P1 承诺内；本路线交付到"可迁入"，不承诺"可迁出"。
+- 迁出 P2（用户解挂）：RDB 导出器 `internal/rdb/export.go` 七类型全覆盖，真机 7.2.6 加载验证通过；SAVE 同步 / BGSAVE 后台快照一致 / LASTSAVE 转正 / CONFIG `dbfilename`。**已交付（issues #52/#53，见 CONTEXT P2 段）**。
+- AOF 未做：BGREWRITEAOF 维持诚实报错（显性偏差）；完整 AOF 双写仍不在承诺内。
 
 ---
 
@@ -200,4 +201,4 @@ Phase 10 独立，已交付（只读加载）。
 | 7 通知 | M | 跨切面，审计先行 |
 | 8 Tracking | M | 需 1+7 |
 | 9 逐出 | S-M | |
-| 10 RDB | XL | ✅ 已交付（只读加载） |
+| 10 RDB | XL | ✅ 已交付（只读加载 + RDB 导出） |

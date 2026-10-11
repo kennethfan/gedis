@@ -189,6 +189,7 @@ func (h *monitorHandler) config(_ context.Context, args []protocol.Value) protoc
 			{"maxmemory", strconv.FormatInt(mi.MaxBytes(), 10)},
 			{"maxmemory-policy", mi.Policy()},
 			{"notify-keyspace-events", h.getNotify()},
+			{"dbfilename", saveTracker.FileName()},
 		}
 		out := make([]protocol.Value, 0, 4)
 		for _, p := range params {
@@ -233,6 +234,9 @@ func (h *monitorHandler) config(_ context.Context, args []protocol.Value) protoc
 				return errValue(err)
 			}
 			return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
+		case "dbfilename":
+			saveTracker.SetFileName(val)
+			return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
 		default:
 			return errValueStr("ERR Unknown parameter '" + name + "'")
 		}
@@ -240,7 +244,7 @@ func (h *monitorHandler) config(_ context.Context, args []protocol.Value) protoc
 		if len(args) != 1 {
 			return errValueStr("ERR wrong number of arguments for 'config|rewrite' command")
 		}
-		return errValueStr("ERR not supported on this engine: config rewrite not implemented")
+		return h.rewriteConfig()
 	default:
 		return errValueStr("ERR unknown subcommand for 'config' command")
 	}
@@ -254,14 +258,20 @@ func (h *monitorHandler) setNotify(v string) error {
 	return SetNotifyString(v)
 }
 
-// persistenceSection 持久化段：无 RDB/AOF，后台保存恒 ok，
-// 最后保存时刻取进程启动秒（与 LASTSAVE 对齐）。
+// persistenceSection 持久化段：rdb_* 取自 saveTracker（SAVE/BGSAVE 成功
+// 即更新；无保存史时取进程启动秒，与 LASTSAVE 对齐）。aof 恒 0（无 AOF
+// 引擎，BGREWRITEAOF 维持诚实报错）。
 func (h *monitorHandler) persistenceSection() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "rdb_changes_since_last_save:0\r\n")
-	fmt.Fprintf(&b, "rdb_bgsave_in_progress:0\r\n")
-	fmt.Fprintf(&b, "rdb_last_save_time:%d\r\n", processStartUnix)
-	fmt.Fprintf(&b, "rdb_last_bgsave_status:ok\r\n")
+	running, status := saveTracker.BGSAVEState()
+	inProg := 0
+	if running {
+		inProg = 1
+	}
+	fmt.Fprintf(&b, "rdb_bgsave_in_progress:%d\r\n", inProg)
+	fmt.Fprintf(&b, "rdb_last_save_time:%d\r\n", saveTracker.LastSave())
+	fmt.Fprintf(&b, "rdb_last_bgsave_status:%s\r\n", status)
 	fmt.Fprintf(&b, "aof_enabled:0\r\n")
 	return b.String()
 }

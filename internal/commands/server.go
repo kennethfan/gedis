@@ -43,11 +43,12 @@ func RegisterServer(r *network.Router, kv KV, stats *network.Stats, hub *replica
 	r.Register("MEMORY", h.memory)
 	r.Register("LATENCY", h.latency)
 	r.Register("DEBUG", h.debug)
-	r.Register("BGSAVE", h.unsupportedPersistence)
-	r.Register("BGREWRITEAOF", h.unsupportedPersistence)
-	r.Register("SAVE", h.unsupportedPersistence)
+	r.Register("BGSAVE", saveTracker.bgsaveCmd)
+	r.Register("BGREWRITEAOF", h.bgrewriteaof)
+	r.Register("SAVE", saveTracker.saveCmd)
 	r.Register("MONITOR", h.monitor)
 	InstallMonitorHook(r)
+	saveTracker.resetStartUnix(deps.StartUnix)
 	return h
 }
 
@@ -155,7 +156,7 @@ func (h *serverHandler) lastsave(_ context.Context, args []protocol.Value) proto
 	if len(args) != 0 {
 		return errValueStr("ERR wrong number of arguments for 'lastsave' command")
 	}
-	return protocol.Value{Kind: protocol.KindInteger, I: h.deps.StartUnix}
+	return protocol.Value{Kind: protocol.KindInteger, I: saveTracker.LastSave()}
 }
 
 // role 按 Stats 快照报主从角色；主返回 backlog 最新 offset，
@@ -429,10 +430,10 @@ func (h *serverHandler) debug(ctx context.Context, args []protocol.Value) protoc
 	}
 }
 
-// unsupportedPersistence 诚实失败：本引擎无 RDB/AOF，静默 +OK 是谎言。
-func (h *serverHandler) unsupportedPersistence(_ context.Context, args []protocol.Value) protocol.Value {
+// bgrewriteaof 诚实失败：本引擎无 AOF，静默 +OK 是谎言（P2 偏差，文档注明）。
+func (h *serverHandler) bgrewriteaof(_ context.Context, args []protocol.Value) protocol.Value {
 	if len(args) != 0 {
 		return errValueStr("ERR wrong number of arguments for persistence command")
 	}
-	return errValueStr("ERR not supported on this engine: no RDB/AOF persistence")
+	return errValueStr("ERR not supported on this engine: no AOF persistence")
 }

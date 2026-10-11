@@ -164,14 +164,15 @@ func Test_Server_when_Memory(t *testing.T) {
 	require.Equal(t, protocol.KindError, dispatch(r, "MEMORY").Kind)
 }
 
-// Given: 无 RDB/AOF 引擎
+// Given: SAVE/BGSAVE 已接线为真落盘，BGREWRITEAOF 仍无 AOF 引擎
 // When: BGSAVE / BGREWRITEAOF
-// Then: 诚实报错而非静默 +OK
+// Then: BGSAVE 回 started（后台落盘）；BGREWRITEAOF 诚实报错
 func Test_Server_when_BgsaveUnsupported(t *testing.T) {
-	r, _, _, _, _ := openServerSetup(t)
+	r, store, _, _, _ := openServerSetup(t)
+	SetSaveTarget(store, t.TempDir(), "dump.rdb")
 	got := dispatch(r, "BGSAVE")
-	require.Equal(t, protocol.KindError, got.Kind)
-	require.Contains(t, got.S, "not supported")
+	require.Equal(t, protocol.Value{Kind: protocol.KindSimpleString, S: "Background saving started"}, got)
+	waitBGSAVEIdle(t)
 	got = dispatch(r, "BGREWRITEAOF")
 	require.Equal(t, protocol.KindError, got.Kind)
 	require.Contains(t, got.S, "not supported")
