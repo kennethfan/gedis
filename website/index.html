@@ -104,7 +104,7 @@ curl localhost:9121/metrics   # requires [metrics] enabled</code></pre>
 
 <section>
 <h2>Scope (not yet implemented)</h2>
-<p>RDB import only (<code>--load-rdb</code> loads a real Redis RDB file into an empty database at startup); BGSAVE/SAVE/BGREWRITEAOF return an honest error (no RDB/AOF export) and CONFIG REWRITE (honest rejection).</p>
+<p>RDB import only (<code>--load-rdb</code> loads a real Redis RDB file into an empty database at startup); SAVE/BGSAVE produce a real RDB dump (BGSAVE in background, snapshot-consistent) and BGREWRITEAOF returns an honest error (no AOF engine) and CONFIG REWRITE (honest rejection).</p>
 </section>
 
 <footer>

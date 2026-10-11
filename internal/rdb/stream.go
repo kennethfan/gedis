@@ -92,8 +92,8 @@ func readStream(r *reader, ver byte) (*StreamData, error) {
 		for j := range ents {
 			// ID 差值相对 rax key（master），非逐条累加（streamIteratorGetID 语义）。
 			st.Entries = append(st.Entries, StreamEntry{
-				MS:     baseMS + ents[j].msDiff,
-				Seq:    baseSeq + ents[j].seqDiff,
+				MS:     uint64(int64(baseMS) + ents[j].msDiff),
+				Seq:    uint64(int64(baseSeq) + ents[j].seqDiff),
 				Fields: ents[j].fields,
 			})
 		}
@@ -106,7 +106,7 @@ func readStream(r *reader, ver byte) (*StreamData, error) {
 
 type lpMasterEntry struct {
 	fields         [][2]string
-	msDiff, seqDiff uint64
+	msDiff, seqDiff int64
 }
 
 // walkStreamListpack 走主条目（t_stream.c streamAppendItem 布局）：
@@ -116,11 +116,12 @@ func walkStreamListpack(toks []string) ([]lpMasterEntry, error) {
 	var out []lpMasterEntry
 	var prevNames []string
 	pos := 0
-	atoi := func() (uint64, error) {
+	atoi := func() (int64, error) {
 		if pos >= len(toks) {
 			return 0, fmt.Errorf("rdb: stream listpack truncated")
 		}
-		v, err := strconv.ParseUint(toks[pos], 10, 64)
+		// 差值可为负（13bit 有符号；真机单调 ID 下恒≥0，防御性兼容）。
+		v, err := strconv.ParseInt(toks[pos], 10, 64)
 		if err != nil {
 			return 0, fmt.Errorf("rdb: stream listpack bad int %q", toks[pos])
 		}
@@ -140,7 +141,10 @@ func walkStreamListpack(toks []string) ([]lpMasterEntry, error) {
 			if err != nil {
 				return nil, err
 			}
-			for k := uint64(0); k < mn; k++ {
+			if mn < 0 {
+				return nil, fmt.Errorf("rdb: stream negative master names %d", mn)
+			}
+			for k := int64(0); k < mn; k++ {
 				if pos >= len(toks) {
 					return nil, fmt.Errorf("rdb: stream listpack truncated master names")
 				}
@@ -169,10 +173,10 @@ func walkStreamListpack(toks []string) ([]lpMasterEntry, error) {
 			return nil, err
 		}
 		var names []string
-		var numfields uint64
+		var numfields int64
 		if flags&streamItemSameFields != 0 {
 			names = prevNames
-			numfields = uint64(len(names))
+			numfields = int64(len(names))
 			if numfields == 0 {
 				return nil, fmt.Errorf("rdb: stream samefields without base")
 			}
@@ -181,7 +185,10 @@ func walkStreamListpack(toks []string) ([]lpMasterEntry, error) {
 			if err != nil {
 				return nil, err
 			}
-			for k := uint64(0); k < numfields; k++ {
+			if numfields < 0 {
+				return nil, fmt.Errorf("rdb: stream negative numfields %d", numfields)
+			}
+			for k := int64(0); k < numfields; k++ {
 				if pos >= len(toks) {
 					return nil, fmt.Errorf("rdb: stream listpack truncated names")
 				}
@@ -191,7 +198,7 @@ func walkStreamListpack(toks []string) ([]lpMasterEntry, error) {
 			prevNames = names
 		}
 		var fields [][2]string
-		for k := uint64(0); k < numfields; k++ {
+		for k := int64(0); k < numfields; k++ {
 			if pos >= len(toks) {
 				return nil, fmt.Errorf("rdb: stream listpack truncated values")
 			}
@@ -202,7 +209,7 @@ func walkStreamListpack(toks []string) ([]lpMasterEntry, error) {
 		if err != nil {
 			return nil, err
 		}
-		want := 3 + numfields
+		want := int64(3) + numfields
 		if flags&streamItemSameFields == 0 {
 			want += numfields + 1
 		}

@@ -55,16 +55,20 @@ func TestReadonlyReplicaRejectsHexpires(t *testing.T) {
 	require.Equal(t, protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}, dispatch(r, "READONLY"))
 }
 
-// Given: 本引擎无 RDB/AOF
-// When: SAVE / SAVE extra-arg
-// Then: 与 BGSAVE 同文案诚实报错；多余参数报 wrong number
+// Given: SAVE 已接线为真落盘，BGREWRITEAOF 仍无 AOF 引擎
+// When: SAVE / SAVE extra-arg / BGREWRITEAOF
+// Then: SAVE 回 OK；多余参数报 wrong number；BGREWRITEAOF 诚实报错
 func TestSaveFailsHonestly(t *testing.T) {
-	r, _, _, _, _ := openServerSetup(t)
+	r, store, _, _, _ := openServerSetup(t)
+	SetSaveTarget(store, t.TempDir(), "dump.rdb")
 	got := dispatch(r, "SAVE")
-	require.Equal(t, protocol.KindError, got.Kind)
-	require.Equal(t, "ERR not supported on this engine: no RDB/AOF persistence", got.S)
+	require.Equal(t, protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}, got)
 
 	got = dispatch(r, "SAVE", "extra")
 	require.Equal(t, protocol.KindError, got.Kind)
 	require.Contains(t, got.S, "wrong number of arguments")
+
+	got = dispatch(r, "BGREWRITEAOF")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Equal(t, "ERR not supported on this engine: no AOF persistence", got.S)
 }

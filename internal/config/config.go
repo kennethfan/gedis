@@ -54,6 +54,9 @@ type Memory struct {
 type Persistence struct {
 	AppendOnly bool   `toml:"appendonly"`
 	Fsync      string `toml:"fsync"`
+	// DBFilename 是 RDB 落盘文件名（SAVE/BGSAVE 用；空=默认 dump.rdb，
+	// 默认值在使用处补，与 AppendOnly/Fsync 一致不在 Load 里补）。
+	DBFilename string `toml:"dbfilename"`
 }
 
 // Metrics holds the Prometheus endpoint settings. Disabled by default
