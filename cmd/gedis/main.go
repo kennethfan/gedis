@@ -156,6 +156,7 @@ func run() error {
 	commands.RegisterDumpRestore(router, store)
 	commands.RegisterBitmap(router, store)
 	commands.RegisterHLL(router, store)
+	commands.RegisterVector(router, store)
 	commands.RegisterStream(router, store, stats)
 	commands.RegisterMonitor(router, store, stats, hub)
 	commands.RegisterReplication(router, store, stats, hub)
