@@ -150,7 +150,7 @@ issues #52（P2a 编码器）/ #53（P2b 接线）。
 
 ## 2026-10-11 缺口盘点（对标 8.0，grill 三轮共识）
 
-issues #55（SETINFO P0）/ #56（脚本与流）/ #57（连接与 ACL）/ #58（服务自省）/ #59（vector set，P0 已交付，P1/P2 后续）；模块面（JSON/Search/时序/Bloom）为显性非目标（wontfix），8.2/8.4 增量记 deferred。
+issues #55（SETINFO P0）/ #56（脚本与流）/ #57（连接与 ACL）/ #58（服务自省）/ #59（vector set，P0 已交付，P1 已暂停、P2 后续）；模块面（JSON/Search/时序/Bloom）为显性非目标（wontfix），8.2/8.4 增量记 deferred。
 
 ### 交付声明
 
@@ -162,7 +162,7 @@ issues #55（SETINFO P0）/ #56（脚本与流）/ #57（连接与 ACL）/ #58�
 
 - **SENTINEL 六件套 + 五组 HELP + LATENCY/MEMORY 边角完成（#58）**：SENTINEL HELP 49 行、CLIENT HELP 54 行、COMMAND HELP 21 行、MEMORY HELP 14 行、LATENCY HELP 17 行均为探针原文静态文本；INFO-CACHE 已知回 [INFO] 未知回空；PENDING-SCRIPTS 恒空；SIMULATE-FAILURE HELP 回小写 flag 表、带 flag 诚实错（绝不真 crash）；CONFIG/DEBUG 为内存态（只存不联动定时器）；MEMORY DOCTOR 恒回 Sam 文、PURGE 回 OK（STATS/MALLOC-STATS 维持诚实错）；LATENCY DOCTOR 回 Dave 文、GRAPH 恒无样本错、HISTOGRAM 恒空。
 
-- **vector set P0 完成（#59 P0，P1/P2 后续）**：新类型字节 + `vs:` 前缀整对象 blob（全精度向量 + 可选属性）；VADD 子集（FP32/VALUES，其余选项 syntax error）、VCARD/VDIM/VEMB/VREM/VRANDMEMBER、VSIM 暴力精确版（恒 TRUTH 语义，未知 key 空数组、维度不等跳过）；TYPE 经类型表自动生效；RDB vectorset 延后到 P2。
+- **vector set P0 完成（#59 P0，P1 已暂停、P2 后续）**：新类型字节 + `vs:` 前缀整对象 blob（全精度向量 + 可选属性）；VADD 子集（FP32/VALUES，其余选项 syntax error）、VCARD/VDIM/VEMB/VREM/VRANDMEMBER、VSIM 暴力精确版（恒 TRUTH 语义，未知 key 空数组、维度不等跳过）；TYPE 经类型表自动生效；RDB vectorset 延后到 P2。P1（HNSW+VINFO/VLINKS+属性面）经用户确认暂停，暂停记录见 issue #59 comment，scope 保留待重启。
 
 ## References
 

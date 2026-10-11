@@ -24,7 +24,7 @@
 <ul class="features">
 <li><strong>Redis compatible</strong> — RESP2/RESP3, drop-in replacement (<code>redis-cli</code> works directly)</li>
 <li><strong>Pebble storage</strong> — pure Go, no CGo, WAL + tunable fsync</li>
-<li><strong>Data structures</strong> — String, Hash, List, Set, Sorted Set, Geo, Bitmap, HyperLogLog, Stream (with adaptive encodings; Geo reuses ZSet, Bitmap reuses String)</li>
+<li><strong>Data structures</strong> — String, Hash, List, Set, Sorted Set, Geo, Bitmap, HyperLogLog, Stream, Vector Set (with adaptive encodings; Geo reuses ZSet, Bitmap reuses String; Vector Set P0: VADD subset, VCARD/VDIM/VEMB/VREM/VRANDMEMBER, brute-force VSIM)</li>
 <li><strong>Expiration</strong> — key-level TTL + Hash field expiration (HEXPIRE family), lazy + background active deletion</li>
 <li><strong>Replication</strong> — PSYNC (full RDB + backlog partial sync), read-only replicas</li>
 <li><strong>Memory management</strong> — maxmemory + 8 eviction policies (allkeys/volatile × lru/lfu/random/ttl), runtime CONFIG</li>
