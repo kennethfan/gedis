@@ -381,9 +381,9 @@ func (h *connHandler) hello(ctx context.Context, args []protocol.Value) protocol
 			if !ok {
 				return errValueStr("ERR syntax error")
 			}
-			name = nm
-			rest = rest[2:]
-		default:
+		name = nm
+		rest = rest[2:]
+	default:
 			return errValueStr("ERR syntax error")
 		}
 	}
@@ -593,9 +593,47 @@ func (h *connHandler) command(ctx context.Context, args []protocol.Value) protoc
 			))
 		}
 		return protocol.Value{Kind: protocol.KindArray, Elems: out}
+	case "HELP":
+		if len(args) != 1 {
+			return errValueStr("ERR wrong number of arguments for 'command|help' command")
+		}
+		return commandHelp()
 	default:
 		return errValueStr(fmt.Sprintf("ERR unknown subcommand '%s'. Try COMMAND HELP.", sub))
 	}
+}
+
+// commandHelpLines COMMAND HELP 全文（7.2.6 探针逐字）。
+var commandHelpLines = []string{
+	"COMMAND <subcommand> [<arg> [value] [opt] ...]. Subcommands are:",
+	"(no subcommand)",
+	"    Return details about all Redis commands.",
+	"COUNT",
+	"    Return the total number of commands in this Redis server.",
+	"LIST",
+	"    Return a list of all commands in this Redis server.",
+	"INFO [<command-name> ...]",
+	"    Return details about multiple Redis commands.",
+	"    If no command names are given, documentation details for all",
+	"    commands are returned.",
+	"DOCS [<command-name> ...]",
+	"    Return documentation details about multiple Redis commands.",
+	"    If no command names are given, documentation details for all",
+	"    commands are returned.",
+	"GETKEYS <full-command>",
+	"    Return the keys from a full Redis command.",
+	"GETKEYSANDFLAGS <full-command>",
+	"    Return the keys and the access flags from a full Redis command.",
+	"HELP",
+	"    Print this help.",
+}
+
+func commandHelp() protocol.Value {
+	out := make([]protocol.Value, 0, len(commandHelpLines))
+	for _, s := range commandHelpLines {
+		out = append(out, protocol.Value{Kind: protocol.KindSimpleString, S: s})
+	}
+	return protocol.ArrayOf(out...)
 }
 
 // commandInfo 生成 COMMAND INFO 条目：nil 表全部（按名排序保证确定性），

@@ -196,8 +196,9 @@ func Test_Server_when_ClientSetinfo(t *testing.T) {
 }
 
 // Given: 库中有 string key
-// When: MEMORY USAGE / DOCTOR / STATS
-// Then: USAGE 回正整数估算；缺 key 回空；DOCTOR/STATS 明确不支持
+// When: MEMORY USAGE / DOCTOR / STATS / PURGE
+// Then: USAGE 回正整数估算；缺 key 回空；DOCTOR 回 Sam 文；
+// PURGE 回 OK；STATS 明确不支持
 func Test_Server_when_Memory(t *testing.T) {
 	r, _, _, _, _ := openServerSetup(t)
 	dispatch(r, "SET", "k", "v")
@@ -207,7 +208,10 @@ func Test_Server_when_Memory(t *testing.T) {
 	usage = dispatch(r, "MEMORY", "USAGE", "k", "SAMPLES", "5")
 	require.Equal(t, protocol.KindInteger, usage.Kind)
 	require.Equal(t, protocol.Value{Kind: protocol.KindBulkString}, dispatch(r, "MEMORY", "USAGE", "missing"))
-	require.Equal(t, protocol.KindError, dispatch(r, "MEMORY", "DOCTOR").Kind)
+	doctor := dispatch(r, "MEMORY", "DOCTOR")
+	require.Equal(t, protocol.KindBulkString, doctor.Kind)
+	require.Contains(t, string(doctor.Bulk), "Hi Sam")
+	require.Equal(t, protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}, dispatch(r, "MEMORY", "PURGE"))
 	require.Equal(t, protocol.KindError, dispatch(r, "MEMORY", "STATS").Kind)
 	require.Equal(t, protocol.KindError, dispatch(r, "MEMORY").Kind)
 }

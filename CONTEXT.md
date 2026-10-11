@@ -160,6 +160,8 @@ issues #55（SETINFO P0）/ #56（脚本与流）/ #57（连接与 ACL）/ #58�
 
 - **ACL CAT/GENPASS/HELP/LOAD + COMMAND GETKEYSANDFLAGS 完成（#57）**：HELP 为探针原文静态文本；CAT 类别取已登记元数据去重排序（与真机固定表偏差）；GENPASS 规则为 ceil(bits/8) 随机字节 hex 化后前截 ceil(bits/4) 位（探针实证）；LOAD 经 ACLLoader 钩重载 aclfile，无文件回探针原文长诚实错；flags 只按 ReadOnly 二分（RO access / RW access update，无 insert/delete 细分，偏差）。
 
+- **SENTINEL 六件套 + 五组 HELP + LATENCY/MEMORY 边角完成（#58）**：SENTINEL HELP 49 行、CLIENT HELP 54 行、COMMAND HELP 21 行、MEMORY HELP 14 行、LATENCY HELP 17 行均为探针原文静态文本；INFO-CACHE 已知回 [INFO] 未知回空；PENDING-SCRIPTS 恒空；SIMULATE-FAILURE HELP 回小写 flag 表、带 flag 诚实错（绝不真 crash）；CONFIG/DEBUG 为内存态（只存不联动定时器）；MEMORY DOCTOR 恒回 Sam 文、PURGE 回 OK（STATS/MALLOC-STATS 维持诚实错）；LATENCY DOCTOR 回 Dave 文、GRAPH 恒无样本错、HISTOGRAM 恒空。
+
 ## References
 
 - [Redis Protocol Specification](https://redis.io/docs/reference/protocol-spec/)
