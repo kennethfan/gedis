@@ -190,3 +190,20 @@ func Test_Config_ACLFields_absent_empty(t *testing.T) {
 	require.Empty(t, cfg.RequirePass)
 	require.Empty(t, cfg.ACLFile)
 }
+
+func Test_Config_Notify_parses_keyspace_events(t *testing.T) {
+	toml := "[server]\nport = 1\n[notify]\nkeyspace_events = \"Ex\"\n"
+	path := filepath.Join(t.TempDir(), "gedis.toml")
+	require.NoError(t, os.WriteFile(path, []byte(toml), 0o600))
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, "Ex", cfg.Notify.KeyspaceEvents)
+}
+
+func Test_Config_Notify_absent_empty(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "gedis.toml")
+	require.NoError(t, os.WriteFile(path, []byte("[server]\nport = 1\n"), 0o600))
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.Empty(t, cfg.Notify.KeyspaceEvents)
+}

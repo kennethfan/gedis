@@ -244,7 +244,7 @@ func (h *monitorHandler) config(_ context.Context, args []protocol.Value) protoc
 		if len(args) != 1 {
 			return errValueStr("ERR wrong number of arguments for 'config|rewrite' command")
 		}
-		return errValueStr("ERR not supported on this engine: config rewrite not implemented")
+		return h.rewriteConfig()
 	default:
 		return errValueStr("ERR unknown subcommand for 'config' command")
 	}

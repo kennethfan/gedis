@@ -87,14 +87,14 @@ Gedis 使用 Pebble 作为底层存储引擎，通过前缀方案在同一个 Pe
 ### 交付声明
 
 - **Phase 8 CLIENT TRACKING 完成**：`CLIENT TRACKING on/off` + BCAST（PREFIX 可重复，无 PREFIX 通配）/ OPTIN+`CLIENT CACHING yes|no` / OPTOUT / NOLOOP；读注册表（TrackTable 正反向）+ BCAST 前缀订阅表；失效推送 = 存储层 change hook（Set/Delete/WriteBatch，op 's'/'d'，ctx 透传）+ 逐出 evictHook（op 'e'）→ 跟踪表反查 → RESP3 `invalidate` KindPush 直推（per-conn ConnPipe 复用 MONITOR 管道）/ RESP2 发布 `__redis__:invalidate`；NOLOOP 跳写者自己；独立于 notify-keyspace-events（S7 硬约束）；清理三路收敛 `untrack`（off / 断连 ConnClosed / 推送管道写错）。
-- **新命令**：HEXPIRETIME/HPEXPIRETIME、SUBSTR、SWAPDB、COMMAND LIST（COUNT 归一）、CONFIG REWRITE（诚实拒绝 `ERR not supported on this engine: config rewrite not implemented`）。
+- **新命令**：HEXPIRETIME/HPEXPIRETIME、SUBSTR、SWAPDB、COMMAND LIST（COUNT 归一）、CONFIG REWRITE（2026-10-11 转正为真回写：live 白名单四参 → 登记的 TOML 文件 tmp+rename；无配置文件时回真机探针原文 `ERR The server is running without a config file`）。
 - **MONITOR**：实时命令流（顶层 `MONITOR` + `CLIENT MONITOR` 双入口），per-conn 串行出站管道 + per-conn 写锁（`network.LockedWrite`，serve 循环单写点加锁）。
 - **官方事件表核对**（webfetch redis.io keyspace-notifications 全量 diff）：6 候选组（ZPOPMIN/BZPOP\*、LMPOP/BLMPOP/ZMPOP/BZMPOP、ZREMRANGEBYLEX、GEOSEARCHSTORE、GETEX、TOUCH）确认**表外不发**（现状已正确，pin 测试钉零事件）；修复 2 真缺口：HDEL 删至空 hash 补 del 事件（key 移除）、TOUCH 单 key arity 误报（`<2`→`<1`）。
 
 ### 偏差记录（T1-T6 report 汇总）
 
 1. HEXPIRETIME/HPEXPIRETIME arity 取 -3（镜像既有 HTTL:-3 先例 + legacy 无 FIELDS 形态；真机为 -4，未逐字核对）；`COMMAND LIST` 带参错误文案、SWAPDB 非整数文案沿用先例未与真机逐字核对。
-2. `CONFIG REWRITE` 为计划既定诚实拒绝；CONFIG handler 实际位于 monitor.go（计划写 server.go 是定位偏差）。顺带修 keys.go singleFirstCmd 登记缺口（HEXPIRE 族/HTTL/HPTTL/HPERSIST）。
+2. `CONFIG REWRITE` 原为计划既定诚实拒绝（2026-10-11 已转正为真回写，见上）；CONFIG handler 实际位于 monitor.go（计划写 server.go 是定位偏差）。顺带修 keys.go singleFirstCmd 登记缺口（HEXPIRE 族/HTTL/HPTTL/HPERSIST）。
 3. MONITOR：addr 取不到记 `local`（无 lua 场景判定）；admin 跳过名单为显式集合，与真机 admin 全集可能有差；观测点在 handler 前，语法错误命令也会进流。
 4. CLIENT TRACKING：读 hook 成功口径 = 回复非 KindError；hook 在 stats 块后、return 前（slowlog 计时不含 hook）；无连接文案仿 SETNAME 模式（非真机官方文案）；BCAST 连接不做读注册（防双路径重复推送）。
 5. 失效推送：RESP2 通道广播无法对已订阅的 NOLOOP 写者单独过滤（通道级语义，真机行为待核对）；WriteBatch（MSET/Z\*STORE）亦接 change hook（brief 未列，行为超集）；逐出唯一走 evictHook op 'e'（evictOne 不经 Delete 的 op 'd'，避免双重推送）；ConnByID O(n) 反查；内部键（PEL 等）userKeyFromRaw 归一未专项断言。
