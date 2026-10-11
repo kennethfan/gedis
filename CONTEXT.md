@@ -156,6 +156,8 @@ issues #55（SETINFO P0）/ #56（脚本与流）/ #57（连接与 ACL）/ #58�
 
 - **CLIENT SETINFO 完成（#55）**：`LIB-NAME`/`LIB-VER` 分存于 ConnState（RESET 联动清空，LIST 展示为 P2）；非法 section / 缺参逐字对齐 7.2.6 探针。
 
+- **SCRIPT DEBUG/HELP + WAITAOF 完成（#56）**：HELP 为 17 行静态文本（探针原文）；DEBUG 仅 NO 回 OK，YES/SYNC 诚实报错（无交互式调试器）；WAITAOF 无 AOF 引擎，numlocal>0 恒回探针原文错，numlocal=0 立刻回 `[1,0]`（副本 AOF ack 不跟踪）。
+
 ## References
 
 - [Redis Protocol Specification](https://redis.io/docs/reference/protocol-spec/)

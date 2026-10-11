@@ -196,6 +196,7 @@ func CommandArity() map[string]int {
 		"SUNSUBSCRIBE":         -1,
 		"UNWATCH":              1,
 		"WAIT":                 3,
+		"WAITAOF":              4,
 		"WATCH":                -2,
 		"XACK":                 -4,
 		"XADD":                 -5,

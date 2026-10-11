@@ -150,3 +150,26 @@ func Test_Repl_when_ReadOnly(t *testing.T) {
 	r.SetReadOnly(false)
 	require.Equal(t, protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}, dispatch(r, "SET", "k", "v"))
 }
+
+// WM: WAITAOF（#56）：缺参 arity 错；numlocal>0 恒回无 AOF 探针原文；
+// numlocal=0 立刻回 [1,0]；非法整数回越界错。
+func Test_Repl_when_WaitAOF(t *testing.T) {
+	r, _, _, _ := openReplSetup(t)
+	got := dispatch(r, "WAITAOF", "0", "0")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Equal(t, "ERR wrong number of arguments for 'waitaof' command", got.S)
+	got = dispatch(r, "WAITAOF", "0", "0", "0")
+	require.Equal(t, protocol.KindArray, got.Kind)
+	require.Len(t, got.Elems, 2)
+	require.Equal(t, int64(1), got.Elems[0].I)
+	require.Equal(t, int64(0), got.Elems[1].I)
+	got = dispatch(r, "WAITAOF", "1", "0", "100")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Equal(t, "ERR WAITAOF cannot be used when numlocal is set but appendonly is disabled.", got.S)
+	got = dispatch(r, "WAITAOF", "x", "0", "0")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Equal(t, "ERR value is not an integer or out of range", got.S)
+	got = dispatch(r, "WAITAOF", "0", "-1", "0")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Equal(t, "ERR value is not an integer or out of range", got.S)
+}
