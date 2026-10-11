@@ -559,6 +559,40 @@ func (h *connHandler) command(ctx context.Context, args []protocol.Value) protoc
 			out = append(out, protocol.BulkOf(k))
 		}
 		return protocol.Value{Kind: protocol.KindArray, Elems: out}
+	case "GETKEYSANDFLAGS":
+		if len(args) < 2 {
+			return errValueStr("ERR wrong number of arguments for 'command|getkeysandflags' command")
+		}
+		name, ok := argString(args[1])
+		if !ok {
+			return errValueStr("ERR syntax error")
+		}
+		upper := strings.ToUpper(name)
+		m, ok := acl.LookupMeta(upper)
+		if !ok {
+			return errValueStr("ERR Invalid command specified")
+		}
+		strs := make([]string, 0, len(args)-2)
+		for _, a := range args[2:] {
+			s, ok := argString(a)
+			if !ok {
+				return errValueStr("ERR syntax error")
+			}
+			strs = append(strs, s)
+		}
+		keys := acl.ExtractKeys(upper, strs)
+		flag := "RW access update"
+		if m.ReadOnly {
+			flag = "RO access"
+		}
+		out := make([]protocol.Value, 0, len(keys))
+		for _, k := range keys {
+			out = append(out, protocol.ArrayOf(
+				protocol.BulkOf(k),
+				protocol.ArrayOf(protocol.BulkOf(flag)),
+			))
+		}
+		return protocol.Value{Kind: protocol.KindArray, Elems: out}
 	default:
 		return errValueStr(fmt.Sprintf("ERR unknown subcommand '%s'. Try COMMAND HELP.", sub))
 	}

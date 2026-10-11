@@ -50,7 +50,7 @@ func wireMainRouter(t *testing.T) *network.Router {
 	reg := RegisterAuth(r, st)
 	connReg := RegisterConn(r, st, reg)
 	RegisterServer(r, store, stats, hub, connReg, ServerDeps{})
-	RegisterACL(r, st, reg, nil)
+	RegisterACL(r, st, reg, nil, nil)
 	return r
 }
 

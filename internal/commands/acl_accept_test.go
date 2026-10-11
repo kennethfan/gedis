@@ -27,7 +27,7 @@ func openACLAccept(t testing.TB) string {
 	r := network.DefaultRouter()
 	RegisterStrings(r, store)
 	reg := RegisterAuth(r, st)
-	RegisterACL(r, st, reg, nil)
+	RegisterACL(r, st, reg, nil, nil)
 	r.SetAuthorizer(st)
 	srv := network.NewServer(r)
 	srv.UserProvider = reg

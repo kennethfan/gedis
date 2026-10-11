@@ -45,6 +45,17 @@ func LookupMeta(cmd string) (Meta, bool) {
 	return m, ok
 }
 
+// AllMetas 返回全部已登记元数据的快照（供 ACL CAT 枚举类别与成员）。
+func AllMetas() []Meta {
+	metaMu.RLock()
+	defer metaMu.RUnlock()
+	out := make([]Meta, 0, len(metas))
+	for _, m := range metas {
+		out = append(out, m)
+	}
+	return out
+}
+
 // ExtractKeys 按元数据从参数中提取 key（args 为命令名之后的参数）。
 func ExtractKeys(cmd string, args []string) []string {
 	m, ok := LookupMeta(cmd)
