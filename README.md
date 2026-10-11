@@ -8,7 +8,7 @@ A Redis-compatible storage engine in Go, backed by Pebble (pure-Go LSM-tree).
 
 - **Redis compatible** — RESP2/RESP3, drop-in replacement (`redis-cli` works directly)
 - **Pebble storage** — pure Go, no CGo, WAL + tunable fsync
-- **Data structures** — String, Hash, List, Set, Sorted Set, Geo, Bitmap, HyperLogLog, Stream (with adaptive encodings; Geo reuses ZSet, Bitmap reuses String)
+- **Data structures** — String, Hash, List, Set, Sorted Set, Geo, Bitmap, HyperLogLog, Stream, Vector Set (with adaptive encodings; Geo reuses ZSet, Bitmap reuses String; Vector Set P0: VADD subset, VCARD/VDIM/VEMB/VREM/VRANDMEMBER, brute-force VSIM)
 - **Expiration** — key-level TTL + Hash field expiration (HEXPIRE family), lazy + background active deletion
 - **Replication** — PSYNC (full RDB + backlog partial sync), read-only replicas
 - **Memory management** — maxmemory + 8 eviction policies (allkeys/volatile × lru/lfu/random/ttl), runtime CONFIG

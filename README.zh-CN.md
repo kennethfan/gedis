@@ -8,7 +8,7 @@
 
 - **Redis 兼容** — RESP2/RESP3，可作为 drop-in 替换（`redis-cli` 直连）
 - **Pebble 存储引擎** — 纯 Go，无 CGo 依赖，WAL + 可调 fsync
-- **数据结构** — String、Hash、List、Set、Sorted Set、Geo、Bitmap、HyperLogLog、Stream（含自适应编码；Geo 复用 ZSet，Bitmap 复用 String）
+- **数据结构** — String、Hash、List、Set、Sorted Set、Geo、Bitmap、HyperLogLog、Stream、Vector Set（含自适应编码；Geo 复用 ZSet，Bitmap 复用 String；Vector Set P0：VADD 子集、VCARD/VDIM/VEMB/VREM/VRANDMEMBER、暴力精确版 VSIM）
 - **过期** — key 级 TTL + Hash field 过期（HEXPIRE 系），被动 + 后台主动删除
 - **主从复制** — PSYNC（全量 RDB + backlog 部分同步），只读复本
 - **内存管理** — maxmemory + 8 种逐出策略（allkeys/volatile × lru/lfu/random/ttl），CONFIG 运行时调整
