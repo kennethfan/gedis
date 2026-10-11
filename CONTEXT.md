@@ -158,6 +158,8 @@ issues #55（SETINFO P0）/ #56（脚本与流）/ #57（连接与 ACL）/ #58�
 
 - **SCRIPT DEBUG/HELP + WAITAOF 完成（#56）**：HELP 为 17 行静态文本（探针原文）；DEBUG 仅 NO 回 OK，YES/SYNC 诚实报错（无交互式调试器）；WAITAOF 无 AOF 引擎，numlocal>0 恒回探针原文错，numlocal=0 立刻回 `[1,0]`（副本 AOF ack 不跟踪）。
 
+- **ACL CAT/GENPASS/HELP/LOAD + COMMAND GETKEYSANDFLAGS 完成（#57）**：HELP 为探针原文静态文本；CAT 类别取已登记元数据去重排序（与真机固定表偏差）；GENPASS 规则为 ceil(bits/8) 随机字节 hex 化后前截 ceil(bits/4) 位（探针实证）；LOAD 经 ACLLoader 钩重载 aclfile，无文件回探针原文长诚实错；flags 只按 ReadOnly 二分（RO access / RW access update，无 insert/delete 细分，偏差）。
+
 ## References
 
 - [Redis Protocol Specification](https://redis.io/docs/reference/protocol-spec/)

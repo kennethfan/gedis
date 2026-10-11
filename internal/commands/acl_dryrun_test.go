@@ -19,7 +19,7 @@ func openDryRun(t testing.TB) (*network.Router, *acl.Store) {
 	acl.RegisterMeta(acl.Meta{Name: "SET", Category: "string", Keys: acl.KeySpec{First: 0, Last: 0}})
 	r := network.NewRouter()
 	reg := RegisterAuth(r, st)
-	RegisterACL(r, st, reg, nil)
+	RegisterACL(r, st, reg, nil, nil)
 	r.SetAuthorizer(st)
 	return r, st
 }

@@ -21,7 +21,7 @@ func Test_ACLAccept_UserLifecycle(t *testing.T) {
 	r := network.DefaultRouter()
 	RegisterStrings(r, store)
 	reg := RegisterAuth(r, st)
-	RegisterACL(r, st, reg, nil)
+	RegisterACL(r, st, reg, nil, nil)
 	r.SetAuthorizer(st)
 	srv := network.NewServer(r)
 	srv.UserProvider = reg

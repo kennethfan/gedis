@@ -220,10 +220,12 @@ func run() error {
 		},
 	})
 	var aclSaver commands.ACLSaver
+	var aclLoader commands.ACLLoader
 	if cfg.ACLFile != "" {
 		aclSaver = func() error { return acl.Save(cfg.ACLFile, aclStore) }
+		aclLoader = func() error { return acl.Load(cfg.ACLFile, aclStore) }
 	}
-	commands.RegisterACL(router, aclStore, authReg, aclSaver)
+	commands.RegisterACL(router, aclStore, authReg, aclSaver, aclLoader)
 	router.SetAuthorizer(aclStore)
 	srv.UserProvider = authReg
 	var sentinelSrv *network.Server

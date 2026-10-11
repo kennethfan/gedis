@@ -18,7 +18,7 @@ func TestLuaRespectsACL(t *testing.T) {
 	}
 	r.SetAuthorizer(st)
 	reg := RegisterAuth(r, st)
-	RegisterACL(r, st, reg, nil)
+	RegisterACL(r, st, reg, nil, nil)
 	ctx := network.ContextWithUser(context.Background(), "alice")
 	v := r.Dispatch(ctx, protocol.ArrayOf(
 		protocol.BulkOf("EVAL"),
