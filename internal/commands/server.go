@@ -224,7 +224,7 @@ func (h *serverHandler) time_(_ context.Context, args []protocol.Value) protocol
 	)
 }
 
-// client 实现 CLIENT 子命令：LIST/GETNAME/SETNAME 走 ConnRegistry，
+// client 实现 CLIENT 子命令：LIST/GETNAME/SETNAME/SETINFO 走 ConnRegistry，
 // ID 取本连接序号；KILL 尚未接线，诚实报错。
 func (h *serverHandler) client(ctx context.Context, args []protocol.Value) protocol.Value {
 	if len(args) < 1 {
@@ -286,6 +286,28 @@ func (h *serverHandler) client(ctx context.Context, args []protocol.Value) proto
 			return errValueStr("ERR no connection for client id")
 		}
 		return protocol.Value{Kind: protocol.KindInteger, I: h.conns.IDOf(conn)}
+	case "SETINFO":
+		if len(args) != 3 {
+			return errValueStr("ERR wrong number of arguments for 'client|setinfo' command")
+		}
+		sec, ok := argString(args[1])
+		if !ok {
+			return errValueStr("ERR syntax error")
+		}
+		up := strings.ToUpper(sec)
+		if up != "LIB-NAME" && up != "LIB-VER" {
+			return errValueStr(fmt.Sprintf("ERR Unrecognized option '%s'", sec))
+		}
+		val, ok := argString(args[2])
+		if !ok {
+			return errValueStr("ERR syntax error")
+		}
+		conn, ok := network.ConnFromContext(ctx)
+		if !ok || conn == nil || h.conns == nil {
+			return errValueStr("ERR no connection to set info on")
+		}
+		h.conns.SetLibInfo(conn, up, val)
+		return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
 	case "KILL":
 		return errValueStr("ERR CLIENT KILL not supported (no connection closer wired)")
 	case "MONITOR":

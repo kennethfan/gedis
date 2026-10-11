@@ -36,6 +36,10 @@ type ConnState struct {
 	ID    int64
 	Proto int
 	Name  string
+	// LibName/LibVer 存 CLIENT SETINFO 的客户端库信息（展示为 P2，
+	// 此处只存；RESET 随 Name 一并清空）。
+	LibName string
+	LibVer  string
 	// ReadOnly 记录 READONLY 置位、READWRITE 清零的 per-conn 标志；
 	// 集群副本读路由落地前仅存不读。
 	ReadOnly bool
@@ -160,6 +164,27 @@ func (c *ConnRegistry) SetName(conn net.Conn, name string) {
 	c.state(conn).Name = name
 }
 
+// SetLibInfo 写入 CLIENT SETINFO 的单项（section 须为 LIB-NAME/LIB-VER，
+// 调用方校验；此处只存，CLIENT LIST 展示为 P2）。
+func (c *ConnRegistry) SetLibInfo(conn net.Conn, section, value string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st := c.state(conn)
+	if section == "LIB-NAME" {
+		st.LibName = value
+	} else {
+		st.LibVer = value
+	}
+}
+
+// LibInfoOf 返回库名与版本（P2 的 LIST 展示与单测断言用）。
+func (c *ConnRegistry) LibInfoOf(conn net.Conn) (string, string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st := c.state(conn)
+	return st.LibName, st.LibVer
+}
+
 // SetTracking 写入 CLIENT TRACKING 的配置快照（Prefixes 拷贝入库，
 // 防调用方后续改切片逃逸锁外）。
 func (c *ConnRegistry) SetTracking(conn net.Conn, cfg TrackingCfg) {
@@ -225,6 +250,8 @@ func (c *ConnRegistry) Reset(conn net.Conn) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.state(conn).Name = ""
+	c.state(conn).LibName = ""
+	c.state(conn).LibVer = ""
 }
 
 // ConnClosed 丢弃连接状态，并同步清理跟踪表项与失效推送管道。
