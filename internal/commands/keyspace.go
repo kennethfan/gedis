@@ -36,7 +36,7 @@ func (s *stringHandler) registerKeyspace(r *network.Router) {
 
 // typePrefixes 是全部类型前缀表；getAny 按表逐个探测，List/Set/ZSet
 // 接入时在此追加前缀即可。
-var typePrefixes = []string{"s:", "h:", "l:", "st:", "z:", "hll:", "x:"}
+var typePrefixes = []string{"s:", "h:", "l:", "st:", "z:", "hll:", "x:", "vs:"}
 
 func (s *stringHandler) getAny(ctx context.Context, key string) (datastruct.Entry, error) {
 	return lookupKey(ctx, s.kv, key)
@@ -91,6 +91,8 @@ func typeName(t byte) string {
 		return "string"
 	case datastruct.TypeStream:
 		return "stream"
+	case datastruct.TypeVector:
+		return "vectorset"
 	default:
 		return "none"
 	}

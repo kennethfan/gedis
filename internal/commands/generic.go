@@ -82,6 +82,8 @@ func prefixForType(t byte) string {
 		return "st:"
 	case datastruct.TypeZSet:
 		return "z:"
+	case datastruct.TypeVector:
+		return "vs:"
 	}
 	return ""
 }
