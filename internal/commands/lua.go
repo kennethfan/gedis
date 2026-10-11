@@ -124,6 +124,35 @@ func (r *LuaRegistry) killResult() protocol.Value {
 	}
 }
 
+// scriptHelpLines SCRIPT HELP 17 行（7.2.6 探针原文，SimpleString 输出）。
+var scriptHelpLines = []string{
+	"SCRIPT <subcommand> [<arg> [value] [opt] ...]. Subcommands are:",
+	"DEBUG (YES|SYNC|NO)",
+	"    Set the debug mode for subsequent scripts executed.",
+	"EXISTS <sha1> [<sha1> ...]",
+	"    Return information about the existence of the scripts in the script cache.",
+	"FLUSH [ASYNC|SYNC]",
+	"    Flush the Lua scripts cache. Very dangerous on replicas.",
+	"    When called without the optional mode argument, the behavior is determined by the",
+	"    lazyfree-lazy-user-flush configuration directive. Valid modes are:",
+	"    * ASYNC: Asynchronously flush the scripts cache.",
+	"    * SYNC: Synchronously flush the scripts cache.",
+	"KILL",
+	"    Kill the currently executing Lua script.",
+	"LOAD <script>",
+	"    Load a script into the scripts cache without executing it.",
+	"HELP",
+	"    Print this help.",
+}
+
+func scriptHelp() protocol.Value {
+	out := make([]protocol.Value, 0, len(scriptHelpLines))
+	for _, s := range scriptHelpLines {
+		out = append(out, protocol.Value{Kind: protocol.KindSimpleString, S: s})
+	}
+	return protocol.ArrayOf(out...)
+}
+
 // markDirty 标记某次执行已分发过写命令（分发前拒绝的不调此函数）。
 func (r *LuaRegistry) markDirty(rr *luaRun) {
 	r.mu.Lock()
@@ -294,6 +323,24 @@ func (e *luaExec) handleScript(_ context.Context, args []protocol.Value) protoco
 			return errValueStr("ERR wrong number of arguments for 'script|kill' command")
 		}
 		return e.reg.killResult()
+	case "DEBUG":
+		if len(args) != 2 {
+			return errValueStr("ERR wrong number of arguments for 'script|debug' command")
+		}
+		mode, _ := argString(args[1])
+		switch strings.ToUpper(mode) {
+		case "NO":
+			return protocol.Value{Kind: protocol.KindSimpleString, S: "OK"}
+		case "YES", "SYNC":
+			return errValueStr("ERR SCRIPT DEBUG YES/SYNC not supported on this engine (no interactive Lua debugger)")
+		default:
+			return errValueStr("ERR Use SCRIPT DEBUG YES/SYNC/NO")
+		}
+	case "HELP":
+		if len(args) != 1 {
+			return errValueStr("ERR wrong number of arguments for 'script|help' command")
+		}
+		return scriptHelp()
 	default:
 		return errValueStr(fmt.Sprintf("ERR unknown subcommand '%s'. Try SCRIPT HELP.", sanitizeSub(sub)))
 	}

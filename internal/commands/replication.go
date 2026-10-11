@@ -25,6 +25,7 @@ var replicationMeta = []acl.Meta{
 	{Name: "SLAVEOF", Category: "admin", Keys: acl.KeySpec{First: -1}},
 	{Name: "REPLCONF", Category: "admin", Keys: acl.KeySpec{First: -1}},
 	{Name: "WAIT", Category: "admin", Keys: acl.KeySpec{First: -1}},
+	{Name: "WAITAOF", Category: "admin", Keys: acl.KeySpec{First: -1}},
 	{Name: "SYNC", Category: "admin", Keys: acl.KeySpec{First: -1}},
 	{Name: "FAILOVER", Category: "admin", Keys: acl.KeySpec{First: -1}},
 }
@@ -39,6 +40,7 @@ func RegisterReplication(r *network.Router, kv KV, stats *network.Stats, hub *re
 	r.Register("SLAVEOF", h.replicaof)
 	r.Register("REPLCONF", h.replconf)
 	r.Register("WAIT", h.wait)
+	r.Register("WAITAOF", h.waitaof)
 	r.Register("SYNC", func(context.Context, []protocol.Value) protocol.Value {
 		return errValueStr("ERR SYNC is deprecated, use PSYNC")
 	})
@@ -372,6 +374,44 @@ func (h *replHandler) wait(_ context.Context, args []protocol.Value) protocol.Va
 			return protocol.Value{Kind: protocol.KindInteger, I: int64(h.ackedCount(target))}
 		}
 	}
+}
+
+// waitaof 等 AOF 落盘：本引擎无 AOF，numlocal>0 恒回探针原文错；
+// numlocal=0 立刻回 [1,0]（本地自计数 1；副本 AOF ack 不跟踪，
+// numreplicas>0 亦直接回，偏差见 CONTEXT）。
+func (h *replHandler) waitaof(_ context.Context, args []protocol.Value) protocol.Value {
+	if len(args) != 3 {
+		return errValueStr("ERR wrong number of arguments for 'waitaof' command")
+	}
+	numStr, ok := argString(args[0])
+	if !ok {
+		return errValueStr("ERR syntax error")
+	}
+	numlocal, err := strconv.Atoi(numStr)
+	if err != nil || numlocal < 0 {
+		return errValueStr("ERR value is not an integer or out of range")
+	}
+	repStr, ok := argString(args[1])
+	if !ok {
+		return errValueStr("ERR syntax error")
+	}
+	if n, err := strconv.Atoi(repStr); err != nil || n < 0 {
+		return errValueStr("ERR value is not an integer or out of range")
+	}
+	toStr, ok := argString(args[2])
+	if !ok {
+		return errValueStr("ERR syntax error")
+	}
+	if n, err := strconv.Atoi(toStr); err != nil || n < 0 {
+		return errValueStr("ERR value is not an integer or out of range")
+	}
+	if numlocal > 0 {
+		return errValueStr("ERR WAITAOF cannot be used when numlocal is set but appendonly is disabled.")
+	}
+	return protocol.ArrayOf(
+		protocol.Value{Kind: protocol.KindInteger, I: 1},
+		protocol.Value{Kind: protocol.KindInteger, I: 0},
+	)
 }
 
 // failover 复制级切换：无副本时明确报错；静态拓扑下协同晋升暂不支持。

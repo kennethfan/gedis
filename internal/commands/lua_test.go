@@ -462,3 +462,31 @@ func Test_Lua_when_SandboxGlobals(t *testing.T) {
 		"EVAL", "local i = 0 local r = function() i = i + 1 if i == 1 then return 'return 9' end end return load(r)()", "0"))
 	require.Equal(t, intVal(1), dispatchLua(r, c, "EVAL", "local t = 1 return t", "0"))
 }
+
+// WM: SCRIPT DEBUG/HELP（#56）：DEBUG 无参 arity 错；NO 回 OK；YES/SYNC
+// 诚实错（无交互式调试器）；非法模式回原文；HELP 17 行静态文本，多参错。
+func Test_Lua_when_ScriptDebugHelp(t *testing.T) {
+	r, c := openLuaSetup(t)
+	got := dispatchLua(r, c, "SCRIPT", "DEBUG")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Equal(t, "ERR wrong number of arguments for 'script|debug' command", got.S)
+	require.Equal(t, protocol.Value{Kind: protocol.KindSimpleString, S: "OK"},
+		dispatchLua(r, c, "SCRIPT", "DEBUG", "NO"))
+	got = dispatchLua(r, c, "SCRIPT", "DEBUG", "YES")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "not supported on this engine")
+	got = dispatchLua(r, c, "SCRIPT", "DEBUG", "sync")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Contains(t, got.S, "not supported on this engine")
+	got = dispatchLua(r, c, "SCRIPT", "DEBUG", "FOO")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Equal(t, "ERR Use SCRIPT DEBUG YES/SYNC/NO", got.S)
+	got = dispatchLua(r, c, "SCRIPT", "HELP")
+	require.Equal(t, protocol.KindArray, got.Kind)
+	require.Len(t, got.Elems, 17)
+	require.Equal(t, "SCRIPT <subcommand> [<arg> [value] [opt] ...]. Subcommands are:", got.Elems[0].S)
+	require.Equal(t, "    Print this help.", got.Elems[16].S)
+	got = dispatchLua(r, c, "SCRIPT", "HELP", "X")
+	require.Equal(t, protocol.KindError, got.Kind)
+	require.Equal(t, "ERR wrong number of arguments for 'script|help' command", got.S)
+}
