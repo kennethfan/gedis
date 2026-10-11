@@ -122,9 +122,9 @@ make vet     # Static checks
 make bench   # Benchmarks
 ```
 
-## Scope (not yet implemented)
+## Scope (differences from real Redis)
 
-RDB import only (`--load-rdb` loads a real Redis RDB file into an empty database at startup); SAVE/BGSAVE produce a real RDB dump (BGSAVE in background, snapshot-consistent) and BGREWRITEAOF returns an honest error (no AOF engine); CONFIG REWRITE persists the live allowlist (maxmemory/policy, dbfilename, notify-keyspace-events) back to the config file.
+RDB works both ways: `--load-rdb` imports a real Redis RDB file into an empty database at startup, and SAVE/BGSAVE export a real RDB dump (BGSAVE in background, snapshot-consistent); BGREWRITEAOF returns an honest error (no AOF engine); CONFIG REWRITE persists the live allowlist (maxmemory/policy, dbfilename, notify-keyspace-events) back to the config file.
 
 ## License
 

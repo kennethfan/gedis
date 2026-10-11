@@ -103,8 +103,8 @@ curl localhost:9121/metrics   # requires [metrics] enabled</code></pre>
 </section>
 
 <section>
-<h2>Scope (not yet implemented)</h2>
-<p>RDB import only (<code>--load-rdb</code> loads a real Redis RDB file into an empty database at startup); SAVE/BGSAVE produce a real RDB dump (BGSAVE in background, snapshot-consistent) and BGREWRITEAOF returns an honest error (no AOF engine); CONFIG REWRITE persists the live allowlist (maxmemory/policy, dbfilename, notify-keyspace-events) back to the config file.</p>
+<h2>Scope (differences from real Redis)</h2>
+<p>RDB works both ways: <code>--load-rdb</code> imports a real Redis RDB file into an empty database at startup, and SAVE/BGSAVE export a real RDB dump (BGSAVE in background, snapshot-consistent); BGREWRITEAOF returns an honest error (no AOF engine); CONFIG REWRITE persists the live allowlist (maxmemory/policy, dbfilename, notify-keyspace-events) back to the config file.</p>
 </section>
 
 <footer>
